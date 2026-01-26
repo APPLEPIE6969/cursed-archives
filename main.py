@@ -51,39 +51,50 @@ def get_concept():
     import json
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations - Anti-Bot Mode) ---
+# --- 2. ARTIST (Pollinations - DIRECT API) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
     
-    # TRUNCATE: URLs cannot be too long or they break
-    short_prompt = prompt[:200] 
-    encoded_prompt = urllib.parse.quote(short_prompt)
+    # Clean the prompt for URL
+    clean_prompt = urllib.parse.quote(prompt[:250]) # Limit length to prevent errors
     
-    url = f"https://pollinations.ai/p/{encoded_prompt}?width=720&height=1280&seed={seed}&model=flux-realism"
+    # 1. Try Primary Model (Flux) via DIRECT API
+    # Note: 'image.pollinations.ai' is the developer endpoint (less blocking)
+    url_primary = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
     
-    # DISGUISE: Pretend to be a real Chrome browser on Windows
+    # 2. Backup Model (Turbo) - Lighter, rarely blocks
+    url_backup = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=turbo&nologo=true"
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Referer": "https://google.com"
     }
     
-    # RETRY LOOP: Try 3 times if server is busy
+    # Retry Loop
     for attempt in range(3):
         try:
-            response = requests.get(url, headers=headers, timeout=30)
+            # Use primary URL for first 2 attempts, then backup
+            target_url = url_primary if attempt < 2 else url_backup
+            print(f"   🎨 Generating image (Attempt {attempt+1})...")
             
-            # Verify it's an image
-            image_data = io.BytesIO(response.content)
-            img = PIL.Image.open(image_data)
-            img = img.convert("RGB")
-            img.save(filename, "JPEG")
-            return filename
+            response = requests.get(target_url, headers=headers, timeout=40)
             
+            if response.status_code == 200:
+                # Verify it is actually an image
+                image_data = io.BytesIO(response.content)
+                img = PIL.Image.open(image_data)
+                img = img.convert("RGB") # Fix PNG/RGBA issues
+                img.save(filename, "JPEG")
+                return filename
+            else:
+                print(f"   ⚠️ Server returned {response.status_code}. Retrying...")
+                time.sleep(2)
+                
         except Exception as e:
-            print(f"Attempt {attempt+1} failed: {e}")
-            time.sleep(2) # Wait 2 seconds before retrying
+            print(f"   ⚠️ Error: {e}")
+            time.sleep(2)
             
-    # If all 3 attempts fail, raise error
-    raise Exception("Pollinations blocked the request (Anti-Bot).")
+    raise Exception("All image generation attempts failed. GitHub IPs might be temporarily blocked.")
 
 # --- 3. ANIMATOR (Local Ghost Fade) ---
 def morph_images(img1, img2):
@@ -221,7 +232,7 @@ if __name__ == "__main__":
             data = get_concept()
             f_cute, f_dark, f_audio, f_vid = f"cute_{i}.jpg", f"dark_{i}.jpg", f"voice_{i}.mp3", f"vid_{i}.mp4"
             
-            # Create Assets (With Headers)
+            # Create Assets
             generate_image(data['prompt_cute'], f_cute)
             generate_image(data['prompt_dark'], f_dark)
             asyncio.run(make_audio(data['voiceover'], f_audio))
