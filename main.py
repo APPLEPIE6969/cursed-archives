@@ -5,6 +5,7 @@ import asyncio
 import edge_tts
 import time
 import re
+import urllib.parse
 from groq import Groq
 from moviepy.editor import *
 
@@ -49,20 +50,27 @@ def get_concept():
     import json
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations - Safe Mode) ---
+# --- 2. ARTIST (Pollinations - Relaxed Check) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
-    url = f"https://pollinations.ai/p/{prompt.replace(' ', '%20')}?width=720&height=1280&seed={seed}&model=flux-realism"
+    # Proper URL encoding prevents errors with spaces/symbols
+    encoded_prompt = urllib.parse.quote(prompt)
+    url = f"https://pollinations.ai/p/{encoded_prompt}?width=720&height=1280&seed={seed}&model=flux-realism"
     
-    response = requests.get(url)
+    response = requests.get(url, timeout=60)
     
-    # SAFETY CHECK: Did we actually get an image?
-    if response.status_code == 200 and 'image' in response.headers.get('content-type', ''):
+    # FIXED: We accept 200 OK and just check file size
+    if response.status_code == 200:
         with open(filename, "wb") as f:
             f.write(response.content)
+            
+        # If file is tiny (< 1KB), it's probably a text error, not an image
+        if os.path.getsize(filename) < 1000:
+             raise Exception("Image generation failed (File too small/Text response).")
+             
         return filename
     else:
-        raise Exception(f"Pollinations Error: {response.status_code}")
+        raise Exception(f"Pollinations Server Error: {response.status_code}")
 
 # --- 3. ANIMATOR (Local Ghost Fade) ---
 def morph_images(img1, img2):
