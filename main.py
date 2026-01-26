@@ -7,6 +7,7 @@ import time
 import re
 import urllib.parse
 import io
+import numpy as np
 from groq import Groq
 from moviepy.editor import *
 
@@ -32,17 +33,17 @@ TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
     prompt = """
-    Generate a 'Dark Fantasy / Urban Legend' YouTube Short script (approx 30-40 seconds).
+    Generate a 'Cursed/Dark Fantasy' YouTube Short script (approx 45 seconds).
     1. Pick a character (Pokemon, Disney, SpongeBob, Mario, Shrek).
     2. Write a 3-part 'Found Footage' style narrative:
-       - Part 1: Nostalgic/Innocent beginning.
-       - Part 2: Something starts to look wrong (The Glitch).
-       - Part 3: The horrific true form revealed.
+       - Part 1: The innocent discovery.
+       - Part 2: The realization that something is wrong.
+       - Part 3: The Jumpscare / Monster reveal.
     3. Return JSON with keys:
-       'script': (The full voiceover text, approx 60 words),
-       'prompt_1_normal': (Visual prompt for Part 1),
-       'prompt_2_uncanny': (Visual prompt for Part 2 - slightly distorted/creepy),
-       'prompt_3_horror': (Visual prompt for Part 3 - 8k hyper-realistic monster),
+       'script': (The full voiceover text, approx 80 words),
+       'prompt_1_normal': (Visual: "A centered portrait of [Character], innocent, studio lighting, 8k"),
+       'prompt_2_uncanny': (Visual: "A centered portrait of [Character], slightly distorted, shadowy, uncanny valley, 8k"),
+       'prompt_3_horror': (Visual: "A centered portrait of [Character], horrifying monster, gore, teeth, hyper-realistic, 8k"),
        'title': (Clickbait title),
        'description': (SEO description),
        'hashtags': (Tags string)
@@ -59,16 +60,15 @@ def get_concept():
 # --- 2. ARTIST (Pollinations - Direct API) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
-    clean_prompt = urllib.parse.quote(prompt[:250])
+    clean_prompt = urllib.parse.quote(prompt[:300])
     
-    # URL 1: Flux (High Quality)
+    # URL 1: Flux (Best Quality)
     url_primary = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
     # URL 2: Turbo (Backup)
     url_backup = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=turbo&nologo=true"
     
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        "Referer": "https://google.com"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
     
     for attempt in range(3):
@@ -90,37 +90,55 @@ def generate_image(prompt, filename):
             
     raise Exception(f"Failed to generate {filename}")
 
-# --- 3. EDITOR (3-Stage Narrative) ---
+# --- 3. EDITOR (Cinematic Camera Animation) ---
 def create_story_video(img1, img2, img3, audio_path, output_filename):
-    print("🎬 Assembling 3-Stage Narrative Video...")
+    print("🎬 Animating Cinematic Video...")
     
-    # Load Audio to calculate timing
     audio = AudioFileClip(audio_path)
     total_duration = audio.duration
     
-    # Calculate segment lengths (e.g., if 30s audio -> 10s per image)
-    # We give the horror part slightly more time
-    part1_len = total_duration * 0.3
-    part2_len = total_duration * 0.3
-    part3_len = total_duration * 0.4
+    # Split time: 30% Normal, 30% Uncanny, 40% Horror
+    d1 = total_duration * 0.3
+    d2 = total_duration * 0.3
+    d3 = total_duration * 0.4
     
-    # Create Clips with Crossfades
-    # Image 1: Normal
-    clip1 = ImageClip(img1).set_duration(part1_len + 1).set_position("center")
+    # --- HELPER: Zoom Function ---
+    # zooms in from scale 1.0 to 1.X over time t
+    def zoom_in(t, speed=0.04):
+        return 1 + speed * t
+
+    # --- CLIP 1: Normal (Slow Zoom In) ---
+    clip1 = (ImageClip(img1)
+             .set_duration(d1 + 1)
+             .resize(lambda t: zoom_in(t, 0.05)) # Smooth zoom
+             .set_position(('center', 'center')))
     
-    # Image 2: Uncanny (Starts after Part 1)
-    clip2 = ImageClip(img2).set_duration(part2_len + 1).set_position("center").set_start(part1_len).crossfadein(1.0)
-    
-    # Image 3: Horror (Starts after Part 2)
-    clip3 = ImageClip(img3).set_duration(part3_len + 1).set_position("center").set_start(part1_len + part2_len).crossfadein(1.0)
-    
-    # Zoom Effect (Slow zoom in on the horror image)
-    # clip3 = clip3.fx(vfx.resize, lambda t: 1 + 0.05*t) # Optional: Can remove if it causes lag
-    
-    # Composite them together
+    # --- CLIP 2: Uncanny (Slow Zoom + Drift) ---
+    clip2 = (ImageClip(img2)
+             .set_duration(d2 + 1)
+             .resize(lambda t: zoom_in(t, 0.08)) # Faster zoom
+             .set_position(('center', 'center'))
+             .set_start(d1)
+             .crossfadein(1.0))
+             
+    # --- CLIP 3: Horror (Aggressive Zoom + Shake) ---
+    # We add a "shake" by calculating random position offsets
+    def shake(t):
+        if t < 0.5: return ('center', 'center') # Still for first 0.5s
+        # Random jitter
+        x_jitter = np.random.randint(-5, 5)
+        y_jitter = np.random.randint(-5, 5)
+        return (360 + x_jitter - 360, 640 + y_jitter - 640) # Centered + jitter
+
+    clip3 = (ImageClip(img3)
+             .set_duration(d3 + 1)
+             .resize(lambda t: zoom_in(t, 0.2)) # Extreme zoom
+             .set_position('center') # Keep centered mostly
+             .set_start(d1 + d2)
+             .crossfadein(0.5))
+             
+    # Combine
     final_video = CompositeVideoClip([clip1, clip2, clip3], size=(720, 1280))
-    
-    # Trim to exact audio length
     final_video = final_video.set_duration(total_duration).set_audio(audio)
     
     final_video.write_videofile(
@@ -145,7 +163,6 @@ def pick_winner(candidates):
     
     images = []
     for c in candidates:
-        # We judge based on the FINAL horror image
         images.append(PIL.Image.open(c['img_horror']))
         
     prompt = "Pick the image that looks like the most realistic and terrifying found footage monster. Reply ONLY with number 1, 2, or 3."
@@ -219,7 +236,7 @@ if __name__ == "__main__":
             generate_image(data['prompt_3_horror'], f_horror)
             asyncio.run(make_audio(data['script'], f_audio))
             
-            # 4. Edit Video (3-Stage)
+            # 4. Edit Video (With Animation)
             create_story_video(f_norm, f_uncanny, f_horror, f_audio, f_vid)
             
             candidates.append({
