@@ -8,7 +8,7 @@ import re
 from groq import Groq
 from moviepy.editor import *
 
-# NEW Google SDK (Fixes deprecation errors)
+# NEW Google SDK
 from google import genai
 import PIL.Image
 
@@ -41,7 +41,6 @@ def get_concept():
     - Visuals: "A centered portrait of..."
     """
     
-    # Using the massive 120B model for best creative writing
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="openai/gpt-oss-120b",
@@ -50,29 +49,31 @@ def get_concept():
     import json
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations) ---
+# --- 2. ARTIST (Pollinations - Safe Mode) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
-    # Using Flux Realism for maximum horror detail
     url = f"https://pollinations.ai/p/{prompt.replace(' ', '%20')}?width=720&height=1280&seed={seed}&model=flux-realism"
+    
     response = requests.get(url)
-    with open(filename, "wb") as f:
-        f.write(response.content)
-    return filename
+    
+    # SAFETY CHECK: Did we actually get an image?
+    if response.status_code == 200 and 'image' in response.headers.get('content-type', ''):
+        with open(filename, "wb") as f:
+            f.write(response.content)
+        return filename
+    else:
+        raise Exception(f"Pollinations Error: {response.status_code}")
 
-# --- 3. ANIMATOR (LOCAL GHOST FADE) ---
+# --- 3. ANIMATOR (Local Ghost Fade) ---
 def morph_images(img1, img2):
     print("👻 Generating Ghost-Fade Transformation (Local)...")
     
-    # This runs locally on the CPU. It NEVER fails/crashes.
-    # We load both images and cross-fade them to look like a possession.
     try:
         # Load images
         clip1 = ImageClip(img1).set_duration(3)
         clip2 = ImageClip(img2).set_duration(3)
         
-        # Create a Composite: Clip 2 starts at 1.5s and fades in
-        # Timeline: 0.0s (Cute) -> 1.5s (Fade start) -> 3.0s (Full Dark)
+        # Create a Composite
         video = CompositeVideoClip([
             clip1,
             clip2.set_start(1.5).crossfadein(1.5)
@@ -80,7 +81,7 @@ def morph_images(img1, img2):
         
         output_filename = f"morph_{int(time.time())}.mp4"
         
-        # Write file (suppress logs)
+        # Write file
         video.write_videofile(
             output_filename, 
             fps=24, 
@@ -129,7 +130,6 @@ def pick_winner(candidates):
     prompt = "Pick the SCARIEST and most REALISTIC image. Reply ONLY with the number (1, 2, or 3)."
     
     try:
-        # Using the exact model requested with new SDK
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=[prompt, *images]
@@ -205,7 +205,7 @@ if __name__ == "__main__":
             generate_image(data['prompt_dark'], f_dark)
             asyncio.run(make_audio(data['voiceover'], f_audio))
             
-            # Animate (Local Ghost Fade - No Crash)
+            # Animate (Local Ghost Fade)
             raw = morph_images(f_cute, f_dark)
             
             # Final Edit
