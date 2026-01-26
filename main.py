@@ -6,6 +6,7 @@ import edge_tts
 import time
 import re
 import urllib.parse
+import io
 from groq import Groq
 from moviepy.editor import *
 
@@ -50,27 +51,43 @@ def get_concept():
     import json
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations - Relaxed Check) ---
+# --- 2. ARTIST (Pollinations - With Validator) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
-    # Proper URL encoding prevents errors with spaces/symbols
     encoded_prompt = urllib.parse.quote(prompt)
-    url = f"https://pollinations.ai/p/{encoded_prompt}?width=720&height=1280&seed={seed}&model=flux-realism"
     
+    # Try Flux-Realism first
+    url = f"https://pollinations.ai/p/{encoded_prompt}?width=720&height=1280&seed={seed}&model=flux-realism"
     response = requests.get(url, timeout=60)
     
-    # FIXED: We accept 200 OK and just check file size
-    if response.status_code == 200:
-        with open(filename, "wb") as f:
-            f.write(response.content)
-            
-        # If file is tiny (< 1KB), it's probably a text error, not an image
-        if os.path.getsize(filename) < 1000:
-             raise Exception("Image generation failed (File too small/Text response).")
-             
+    try:
+        # VALIDATION: Try to open the bytes as an image
+        image_data = io.BytesIO(response.content)
+        img = PIL.Image.open(image_data)
+        
+        # Force convert to RGB to fix any format weirdness
+        img = img.convert("RGB")
+        
+        # Save clean JPG
+        img.save(filename, "JPEG")
         return filename
-    else:
-        raise Exception(f"Pollinations Server Error: {response.status_code}")
+        
+    except Exception as e:
+        # If Flux-Realism failed, the server sent text/garbage. 
+        print(f"Flux-Realism failed ({e}). Trying backup model...")
+        
+        # FALLBACK: Try standard Flux
+        url_backup = f"https://pollinations.ai/p/{encoded_prompt}?width=720&height=1280&seed={seed}&model=flux"
+        response = requests.get(url_backup, timeout=60)
+        
+        try:
+            image_data = io.BytesIO(response.content)
+            img = PIL.Image.open(image_data)
+            img = img.convert("RGB")
+            img.save(filename, "JPEG")
+            return filename
+        except Exception as e2:
+            raise Exception(f"All image generators failed. Server returned garbage.")
 
 # --- 3. ANIMATOR (Local Ghost Fade) ---
 def morph_images(img1, img2):
@@ -208,12 +225,12 @@ if __name__ == "__main__":
             data = get_concept()
             f_cute, f_dark, f_audio, f_vid = f"cute_{i}.jpg", f"dark_{i}.jpg", f"voice_{i}.mp3", f"vid_{i}.mp4"
             
-            # Create Assets
+            # Create Assets (With Verification)
             generate_image(data['prompt_cute'], f_cute)
             generate_image(data['prompt_dark'], f_dark)
             asyncio.run(make_audio(data['voiceover'], f_audio))
             
-            # Animate (Local Ghost Fade)
+            # Animate
             raw = morph_images(f_cute, f_dark)
             
             # Final Edit
