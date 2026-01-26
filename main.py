@@ -6,10 +6,9 @@ import edge_tts
 import time
 import re
 from groq import Groq
-from gradio_client import Client
 from moviepy.editor import *
 
-# NEW Google SDK (Fixes the deprecation error)
+# NEW Google SDK (Fixes deprecation errors)
 from google import genai
 import PIL.Image
 
@@ -42,7 +41,7 @@ def get_concept():
     - Visuals: "A centered portrait of..."
     """
     
-    # UPDATED: Using the best model from your list (120B Parameters)
+    # Using the massive 120B model for best creative writing
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="openai/gpt-oss-120b",
@@ -54,36 +53,48 @@ def get_concept():
 # --- 2. ARTIST (Pollinations) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
-    # Using Flux Realism
+    # Using Flux Realism for maximum horror detail
     url = f"https://pollinations.ai/p/{prompt.replace(' ', '%20')}?width=720&height=1280&seed={seed}&model=flux-realism"
     response = requests.get(url)
     with open(filename, "wb") as f:
         f.write(response.content)
     return filename
 
-# --- 3. ANIMATOR (FILM) ---
+# --- 3. ANIMATOR (LOCAL GHOST FADE) ---
 def morph_images(img1, img2):
-    # List of free mirrors to try (in order of reliability)
-    mirrors = [
-        "jbilcke-hf/film-interpolation",
-        "Liaoche/film-interpolation",
-        "docsen/film-interpolation"
-    ]
+    print("👻 Generating Ghost-Fade Transformation (Local)...")
     
-    for space in mirrors:
-        try:
-            print(f"Trying Morph Server: {space}...")
-            client = Client(space)
-            # Use the predict API
-            result = client.predict(img1, img2, 2, api_name="/predict")
-            return result
-        except Exception as e:
-            print(f"Server {space} failed: {e}")
-            continue # Try the next one
-            
-    # If all fail, raise an error to restart the batch
-    raise Exception("All Morph servers are busy or down.")
-    
+    # This runs locally on the CPU. It NEVER fails/crashes.
+    # We load both images and cross-fade them to look like a possession.
+    try:
+        # Load images
+        clip1 = ImageClip(img1).set_duration(3)
+        clip2 = ImageClip(img2).set_duration(3)
+        
+        # Create a Composite: Clip 2 starts at 1.5s and fades in
+        # Timeline: 0.0s (Cute) -> 1.5s (Fade start) -> 3.0s (Full Dark)
+        video = CompositeVideoClip([
+            clip1,
+            clip2.set_start(1.5).crossfadein(1.5)
+        ]).set_duration(4)
+        
+        output_filename = f"morph_{int(time.time())}.mp4"
+        
+        # Write file (suppress logs)
+        video.write_videofile(
+            output_filename, 
+            fps=24, 
+            codec="libx264", 
+            preset="ultrafast", 
+            verbose=False, 
+            logger=None
+        )
+        return output_filename
+        
+    except Exception as e:
+        print(f"Animation Error: {e}")
+        raise e
+
 # --- 4. VOICE ---
 async def make_audio(text, filename):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
@@ -93,38 +104,40 @@ async def make_audio(text, filename):
 def assemble_video(video_path, audio_path, output_filename):
     clip = VideoFileClip(video_path)
     audio = AudioFileClip(audio_path)
-    clip = clip.fx(vfx.speedx, 0.7).fx(vfx.time_mirror)
-    final_clip = concatenate_videoclips([clip, clip])
+    
+    # Speed up slightly and boomerang
+    clip = clip.fx(vfx.speedx, 1.1)
+    clip_reversed = clip.fx(vfx.time_mirror)
+    final_clip = concatenate_videoclips([clip, clip_reversed])
+    
+    # Loop video to match audio length
     final_clip = final_clip.loop(duration=audio.duration + 1)
     final_clip = final_clip.set_audio(audio)
+    
     final_clip.write_videofile(output_filename, fps=24, codec='libx264', preset='ultrafast')
     return output_filename
 
 # --- 6. JUDGE (Gemini 3 Flash Preview) ---
 def pick_winner(candidates):
-    print("👨‍⚖️ Gemini 3 Flash Preview is judging...")
-    
-    # New Client for SDK v1.0
+    print("👨‍⚖️ Gemini 3 is judging...")
     client = genai.Client(api_key=GEMINI_KEY)
     
     images = []
     for c in candidates:
-        # We open the image file to send bytes directly
         images.append(PIL.Image.open(c['dark_image']))
         
     prompt = "Pick the SCARIEST and most REALISTIC image. Reply ONLY with the number (1, 2, or 3)."
     
     try:
-        # EXACT MODEL REQUESTED
+        # Using the exact model requested with new SDK
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=[prompt, *images]
         )
-        
         match = re.search(r'\d+', response.text)
         return int(match.group()) - 1 if match else 0
     except Exception as e:
-        print(f"Judge Error: {e}. Picking #1")
+        print(f"Judge Error: {e}. Defaulting to #1")
         return 0
 
 # --- 7. UPLOADER (YouTube) ---
@@ -169,9 +182,12 @@ def upload_to_youtube(video_path, title, description, tags):
 # --- NOTIFIER ---
 def notify_group(message):
     if TG_TOKEN and TG_CHAT:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        payload = {'chat_id': TG_CHAT, 'text': message}
-        requests.post(url, data=payload)
+        try:
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+            payload = {'chat_id': TG_CHAT, 'text': message}
+            requests.post(url, data=payload)
+        except:
+            pass
 
 # --- MAIN ---
 if __name__ == "__main__":
@@ -180,24 +196,28 @@ if __name__ == "__main__":
     # 3 Batches
     for i in range(3):
         try:
-            print(f"--- Batch {i+1} ---")
+            print(f"\n--- Batch {i+1} ---")
             data = get_concept()
             f_cute, f_dark, f_audio, f_vid = f"cute_{i}.jpg", f"dark_{i}.jpg", f"voice_{i}.mp3", f"vid_{i}.mp4"
             
+            # Create Assets
             generate_image(data['prompt_cute'], f_cute)
             generate_image(data['prompt_dark'], f_dark)
             asyncio.run(make_audio(data['voiceover'], f_audio))
             
+            # Animate (Local Ghost Fade - No Crash)
             raw = morph_images(f_cute, f_dark)
+            
+            # Final Edit
             assemble_video(raw, f_audio, f_vid)
             
             candidates.append({
                 "video": f_vid, "dark_image": f_dark,
                 "title": data['title'], "desc": data['description'], "tags": data['hashtags']
             })
-            print("Batch Success")
+            print("✅ Batch Success")
         except Exception as e:
-            print(f"Batch Error: {e}")
+            print(f"❌ Batch Failed: {e}")
             pass
         time.sleep(5)
 
@@ -209,5 +229,5 @@ if __name__ == "__main__":
         vid_id = upload_to_youtube(w['video'], w['title'], w['desc'], w['tags'])
         notify_group(f"💀 New Lore Uploaded!\nTitle: {w['title']}\nLink: https://youtube.com/shorts/{vid_id}")
     else:
-        print("Generation failed.")
+        print("All batches failed.")
         notify_group("⚠️ Bot failed to generate video today.")
