@@ -79,7 +79,7 @@ def generate_image(prompt, filename):
             target_url = url_primary if attempt < 2 else url_backup
             print(f"   🎨 Gen Image ({filename}) - Attempt {attempt+1}...")
             
-            # INCREASED TIMEOUT TO 120 SECONDS
+            # FIXED: Increased timeout to 120 seconds to prevent "Read timed out"
             response = requests.get(target_url, headers=headers, timeout=120)
             
             if response.status_code == 200:
@@ -90,7 +90,7 @@ def generate_image(prompt, filename):
             time.sleep(2)
         except Exception as e:
             print(f"   ⚠️ Error: {e}")
-            time.sleep(5) # Wait longer between fails
+            time.sleep(5)
             
     raise Exception(f"Failed to generate {filename}")
 
@@ -102,6 +102,7 @@ def animate_horror_segment(image_path, prompt):
 
     print("   ⚡ Trying Pika Turbo for Horror Reveal...")
     try:
+        # Pika requires Base64 image input
         with open(image_path, "rb") as img_file:
             b64_string = base64.b64encode(img_file.read()).decode('utf-8')
             data_uri = f"data:image/jpeg;base64,{b64_string}"
@@ -138,6 +139,7 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
     audio = AudioFileClip(audio_path)
     total_duration = audio.duration
     
+    # Split timeline
     d1 = total_duration * 0.3
     d2 = total_duration * 0.3
     d3 = total_duration * 0.4
@@ -145,11 +147,13 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
     def zoom_in(t, speed=0.04):
         return 1 + speed * t
 
+    # CLIP 1: Normal
     clip1 = (ImageClip(img1)
              .set_duration(d1 + 1)
              .resize(lambda t: zoom_in(t, 0.05))
              .set_position(('center', 'center')))
     
+    # CLIP 2: Uncanny
     clip2 = (ImageClip(img2)
              .set_duration(d2 + 1)
              .resize(lambda t: zoom_in(t, 0.08))
@@ -157,16 +161,22 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
              .set_start(d1)
              .crossfadein(1.0))
              
+    # CLIP 3: Horror (Pika Video OR Local Image)
     if horror_element.endswith(".mp4"):
+        # PIKA PATH
         clip3_raw = VideoFileClip(horror_element)
         clip3 = clip3_raw.loop(duration=d3+1).resize(height=1280)
+        
+        # Center crop 9:16
         if clip3.w > 720:
              clip3 = clip3.crop(x1=clip3.w/2 - 360, width=720)
+             
         clip3 = (clip3
                  .set_position('center')
                  .set_start(d1 + d2)
                  .crossfadein(0.5))
     else:
+        # LOCAL PATH
         def shake(t):
             if t < 0.5: return ('center', 'center')
             x_jitter = np.random.randint(-5, 5)
@@ -180,6 +190,7 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
                  .set_start(d1 + d2)
                  .crossfadein(0.5))
              
+    # Render
     final_video = CompositeVideoClip([clip1, clip2, clip3], size=(720, 1280))
     final_video = final_video.set_duration(total_duration).set_audio(audio)
     
@@ -274,6 +285,7 @@ if __name__ == "__main__":
             generate_image(data['prompt_3_horror'], f_horror)
             asyncio.run(make_audio(data['script'], f_audio))
             
+            # Try Pika, fallback to Local
             horror_element = animate_horror_segment(f_horror, data['prompt_3_horror'])
             if horror_element is None: horror_element = f_horror
             
