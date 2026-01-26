@@ -1,0 +1,11 @@
+moviepy==1.0.3
+edge-tts
+groq
+gradio_client
+requests
+imageio[ffmpeg]
+google-generativeai
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
