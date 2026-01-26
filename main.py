@@ -208,7 +208,7 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
         codec='libx264', 
         preset='ultrafast',
         verbose=False, 
-        logger=bar
+        logger="bar"
     )
     return output_filename
 
