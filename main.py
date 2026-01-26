@@ -30,7 +30,7 @@ YT_CLIENT_SECRET = os.environ.get("YOUTUBE_CLIENT_SECRET")
 YT_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
-FAL_KEY = os.environ.get("FAL_KEY") # NEW KEY
+FAL_KEY = os.environ.get("FAL_KEY")
 
 # --- 1. BRAIN (Groq - Storyteller Mode) ---
 def get_concept():
@@ -79,7 +79,8 @@ def generate_image(prompt, filename):
             target_url = url_primary if attempt < 2 else url_backup
             print(f"   🎨 Gen Image ({filename}) - Attempt {attempt+1}...")
             
-            response = requests.get(target_url, headers=headers, timeout=40)
+            # INCREASED TIMEOUT TO 120 SECONDS
+            response = requests.get(target_url, headers=headers, timeout=120)
             
             if response.status_code == 200:
                 image_data = io.BytesIO(response.content)
@@ -89,25 +90,22 @@ def generate_image(prompt, filename):
             time.sleep(2)
         except Exception as e:
             print(f"   ⚠️ Error: {e}")
-            time.sleep(2)
+            time.sleep(5) # Wait longer between fails
             
     raise Exception(f"Failed to generate {filename}")
 
 # --- 3. ANIMATOR (Pika Turbo + Local Fallback) ---
 def animate_horror_segment(image_path, prompt):
-    # If FAL_KEY is missing or Pika fails, we return None (triggering local fallback)
     if not FAL_KEY:
         print("   ⚠️ No FAL_KEY found. Using Local Animation.")
         return None
 
     print("   ⚡ Trying Pika Turbo for Horror Reveal...")
     try:
-        # 1. Convert Local Image to Base64
         with open(image_path, "rb") as img_file:
             b64_string = base64.b64encode(img_file.read()).decode('utf-8')
             data_uri = f"data:image/jpeg;base64,{b64_string}"
 
-        # 2. Submit to Pika via Fal.ai
         handler = fal_client.submit(
             "fal-ai/pika/v2/turbo/image-to-video",
             arguments={
@@ -118,11 +116,9 @@ def animate_horror_segment(image_path, prompt):
             }
         )
         
-        # 3. Get Result
         result = handler.get()
         video_url = result['video']['url']
         
-        # 4. Download Video
         video_filename = f"pika_{int(time.time())}.mp4"
         response = requests.get(video_url)
         with open(video_filename, "wb") as f:
@@ -135,30 +131,25 @@ def animate_horror_segment(image_path, prompt):
         print(f"   ⚠️ Pika Failed ({e}). Switching to Local Animation.")
         return None
 
-# --- 4. EDITOR (Cinematic Camera + Pika Integration) ---
+# --- 4. EDITOR (Cinematic Camera) ---
 def create_story_video(img1, img2, horror_element, audio_path, output_filename):
-    # horror_element can be a .jpg (if Pika failed) or .mp4 (if Pika worked)
     print("🎬 Assembling Cinematic Video...")
     
     audio = AudioFileClip(audio_path)
     total_duration = audio.duration
     
-    # Split time: 30% Normal, 30% Uncanny, 40% Horror
     d1 = total_duration * 0.3
     d2 = total_duration * 0.3
     d3 = total_duration * 0.4
     
-    # --- HELPER: Zoom Function ---
     def zoom_in(t, speed=0.04):
         return 1 + speed * t
 
-    # --- CLIP 1: Normal (Slow Zoom In) ---
     clip1 = (ImageClip(img1)
              .set_duration(d1 + 1)
              .resize(lambda t: zoom_in(t, 0.05))
              .set_position(('center', 'center')))
     
-    # --- CLIP 2: Uncanny (Slow Zoom + Drift) ---
     clip2 = (ImageClip(img2)
              .set_duration(d2 + 1)
              .resize(lambda t: zoom_in(t, 0.08))
@@ -166,23 +157,16 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
              .set_start(d1)
              .crossfadein(1.0))
              
-    # --- CLIP 3: Horror Reveal (Pika OR Local) ---
     if horror_element.endswith(".mp4"):
-        # USE PIKA VIDEO
-        # We assume Pika video is 5s. We loop/speed it to match d3.
         clip3_raw = VideoFileClip(horror_element)
         clip3 = clip3_raw.loop(duration=d3+1).resize(height=1280)
-        # Center crop to ensure it fills 9:16
         if clip3.w > 720:
              clip3 = clip3.crop(x1=clip3.w/2 - 360, width=720)
-        
         clip3 = (clip3
                  .set_position('center')
                  .set_start(d1 + d2)
                  .crossfadein(0.5))
     else:
-        # USE LOCAL ANIMATION (Fallback)
-        # Aggressive Zoom + Shake
         def shake(t):
             if t < 0.5: return ('center', 'center')
             x_jitter = np.random.randint(-5, 5)
@@ -196,7 +180,6 @@ def create_story_video(img1, img2, horror_element, audio_path, output_filename):
                  .set_start(d1 + d2)
                  .crossfadein(0.5))
              
-    # Combine
     final_video = CompositeVideoClip([clip1, clip2, clip3], size=(720, 1280))
     final_video = final_video.set_duration(total_duration).set_audio(audio)
     
@@ -222,7 +205,6 @@ def pick_winner(candidates):
     
     images = []
     for c in candidates:
-        # Judge based on the horror image
         images.append(PIL.Image.open(c['img_horror']))
         
     prompt = "Pick the image that looks like the most realistic and terrifying found footage monster. Reply ONLY with number 1, 2, or 3."
@@ -280,31 +262,21 @@ if __name__ == "__main__":
     for i in range(3):
         try:
             print(f"\n--- Batch {i+1} ---")
-            # 1. Get Story
             data = get_concept()
-            
-            # 2. Define Filenames
             f_norm = f"batch{i}_normal.jpg"
             f_uncanny = f"batch{i}_uncanny.jpg"
             f_horror = f"batch{i}_horror.jpg"
             f_audio = f"batch{i}_voice.mp3"
             f_vid = f"batch{i}_final.mp4"
             
-            # 3. Create Assets
             generate_image(data['prompt_1_normal'], f_norm)
             generate_image(data['prompt_2_uncanny'], f_uncanny)
             generate_image(data['prompt_3_horror'], f_horror)
             asyncio.run(make_audio(data['script'], f_audio))
             
-            # 4. Animate Horror Part (Pika vs Local)
-            # This returns either a .mp4 (Pika) or .jpg (Local fallback)
             horror_element = animate_horror_segment(f_horror, data['prompt_3_horror'])
+            if horror_element is None: horror_element = f_horror
             
-            # If animate_horror_segment returned None (Fal failed completely), fallback to jpg
-            if horror_element is None:
-                horror_element = f_horror
-            
-            # 5. Edit Video
             create_story_video(f_norm, f_uncanny, horror_element, f_audio, f_vid)
             
             candidates.append({
