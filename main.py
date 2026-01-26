@@ -27,7 +27,7 @@ YT_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- 1. BRAIN (Groq) ---
+# --- 1. BRAIN (Groq - GPT-OSS 120B) ---
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
     prompt = """
@@ -42,10 +42,10 @@ def get_concept():
     - Visuals: "A centered portrait of..."
     """
     
-    # FIXED: Switched to Llama 3.3 (The old one was deleted by Groq)
+    # UPDATED: Using the best model from your list (120B Parameters)
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         response_format={"type": "json_object"}
     )
     import json
