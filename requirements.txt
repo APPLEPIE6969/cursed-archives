@@ -3,6 +3,7 @@ edge-tts
 groq
 requests
 pillow
+fal-client
 imageio[ffmpeg]
 imageio[pyav]
 google-genai
