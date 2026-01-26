@@ -28,19 +28,24 @@ YT_REFRESH_TOKEN = os.environ.get("YOUTUBE_REFRESH_TOKEN")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- 1. BRAIN (Groq - GPT-OSS 120B) ---
+# --- 1. BRAIN (Groq - Storyteller Mode) ---
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
     prompt = """
-    Generate a 'Cursed/Dark Fantasy' YouTube Short concept.
+    Generate a 'Dark Fantasy / Urban Legend' YouTube Short script (approx 30-40 seconds).
     1. Pick a character (Pokemon, Disney, SpongeBob, Mario, Shrek).
-    2. Write a 1-sentence creepy 'Urban Legend' style fact for the voiceover.
-    3. Return JSON with: 'voiceover', 'prompt_cute', 'prompt_dark', 'title', 'description', 'hashtags'.
-    
-    WRITING RULES:
-    - NO 'AI' mentions. Found footage style.
-    - Title: Clickbait (e.g. "The Truth about Pikachu").
-    - Visuals: "A centered portrait of..."
+    2. Write a 3-part 'Found Footage' style narrative:
+       - Part 1: Nostalgic/Innocent beginning.
+       - Part 2: Something starts to look wrong (The Glitch).
+       - Part 3: The horrific true form revealed.
+    3. Return JSON with keys:
+       'script': (The full voiceover text, approx 60 words),
+       'prompt_1_normal': (Visual prompt for Part 1),
+       'prompt_2_uncanny': (Visual prompt for Part 2 - slightly distorted/creepy),
+       'prompt_3_horror': (Visual prompt for Part 3 - 8k hyper-realistic monster),
+       'title': (Clickbait title),
+       'description': (SEO description),
+       'hashtags': (Tags string)
     """
     
     completion = client.chat.completions.create(
@@ -51,18 +56,14 @@ def get_concept():
     import json
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations - DIRECT API) ---
+# --- 2. ARTIST (Pollinations - Direct API) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
+    clean_prompt = urllib.parse.quote(prompt[:250])
     
-    # Clean the prompt for URL
-    clean_prompt = urllib.parse.quote(prompt[:250]) # Limit length to prevent errors
-    
-    # 1. Try Primary Model (Flux) via DIRECT API
-    # Note: 'image.pollinations.ai' is the developer endpoint (less blocking)
+    # URL 1: Flux (High Quality)
     url_primary = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
-    
-    # 2. Backup Model (Turbo) - Lighter, rarely blocks
+    # URL 2: Turbo (Backup)
     url_backup = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&model=turbo&nologo=true"
     
     headers = {
@@ -70,96 +71,84 @@ def generate_image(prompt, filename):
         "Referer": "https://google.com"
     }
     
-    # Retry Loop
     for attempt in range(3):
         try:
-            # Use primary URL for first 2 attempts, then backup
             target_url = url_primary if attempt < 2 else url_backup
-            print(f"   🎨 Generating image (Attempt {attempt+1})...")
+            print(f"   🎨 Gen Image ({filename}) - Attempt {attempt+1}...")
             
             response = requests.get(target_url, headers=headers, timeout=40)
             
             if response.status_code == 200:
-                # Verify it is actually an image
                 image_data = io.BytesIO(response.content)
-                img = PIL.Image.open(image_data)
-                img = img.convert("RGB") # Fix PNG/RGBA issues
+                img = PIL.Image.open(image_data).convert("RGB")
                 img.save(filename, "JPEG")
                 return filename
-            else:
-                print(f"   ⚠️ Server returned {response.status_code}. Retrying...")
-                time.sleep(2)
-                
+            time.sleep(2)
         except Exception as e:
             print(f"   ⚠️ Error: {e}")
             time.sleep(2)
             
-    raise Exception("All image generation attempts failed. GitHub IPs might be temporarily blocked.")
+    raise Exception(f"Failed to generate {filename}")
 
-# --- 3. ANIMATOR (Local Ghost Fade) ---
-def morph_images(img1, img2):
-    print("👻 Generating Ghost-Fade Transformation (Local)...")
+# --- 3. EDITOR (3-Stage Narrative) ---
+def create_story_video(img1, img2, img3, audio_path, output_filename):
+    print("🎬 Assembling 3-Stage Narrative Video...")
     
-    try:
-        # Load images
-        clip1 = ImageClip(img1).set_duration(3)
-        clip2 = ImageClip(img2).set_duration(3)
-        
-        # Create a Composite
-        video = CompositeVideoClip([
-            clip1,
-            clip2.set_start(1.5).crossfadein(1.5)
-        ]).set_duration(4)
-        
-        output_filename = f"morph_{int(time.time())}.mp4"
-        
-        # Write file
-        video.write_videofile(
-            output_filename, 
-            fps=24, 
-            codec="libx264", 
-            preset="ultrafast", 
-            verbose=False, 
-            logger=None
-        )
-        return output_filename
-        
-    except Exception as e:
-        print(f"Animation Error: {e}")
-        raise e
+    # Load Audio to calculate timing
+    audio = AudioFileClip(audio_path)
+    total_duration = audio.duration
+    
+    # Calculate segment lengths (e.g., if 30s audio -> 10s per image)
+    # We give the horror part slightly more time
+    part1_len = total_duration * 0.3
+    part2_len = total_duration * 0.3
+    part3_len = total_duration * 0.4
+    
+    # Create Clips with Crossfades
+    # Image 1: Normal
+    clip1 = ImageClip(img1).set_duration(part1_len + 1).set_position("center")
+    
+    # Image 2: Uncanny (Starts after Part 1)
+    clip2 = ImageClip(img2).set_duration(part2_len + 1).set_position("center").set_start(part1_len).crossfadein(1.0)
+    
+    # Image 3: Horror (Starts after Part 2)
+    clip3 = ImageClip(img3).set_duration(part3_len + 1).set_position("center").set_start(part1_len + part2_len).crossfadein(1.0)
+    
+    # Zoom Effect (Slow zoom in on the horror image)
+    # clip3 = clip3.fx(vfx.resize, lambda t: 1 + 0.05*t) # Optional: Can remove if it causes lag
+    
+    # Composite them together
+    final_video = CompositeVideoClip([clip1, clip2, clip3], size=(720, 1280))
+    
+    # Trim to exact audio length
+    final_video = final_video.set_duration(total_duration).set_audio(audio)
+    
+    final_video.write_videofile(
+        output_filename, 
+        fps=24, 
+        codec='libx264', 
+        preset='ultrafast',
+        verbose=False, 
+        logger=None
+    )
+    return output_filename
 
 # --- 4. VOICE ---
 async def make_audio(text, filename):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(filename)
 
-# --- 5. EDITOR ---
-def assemble_video(video_path, audio_path, output_filename):
-    clip = VideoFileClip(video_path)
-    audio = AudioFileClip(audio_path)
-    
-    # Speed up slightly and boomerang
-    clip = clip.fx(vfx.speedx, 1.1)
-    clip_reversed = clip.fx(vfx.time_mirror)
-    final_clip = concatenate_videoclips([clip, clip_reversed])
-    
-    # Loop video to match audio length
-    final_clip = final_clip.loop(duration=audio.duration + 1)
-    final_clip = final_clip.set_audio(audio)
-    
-    final_clip.write_videofile(output_filename, fps=24, codec='libx264', preset='ultrafast')
-    return output_filename
-
-# --- 6. JUDGE (Gemini 3 Flash Preview) ---
+# --- 5. JUDGE (Gemini 3) ---
 def pick_winner(candidates):
-    print("👨‍⚖️ Gemini 3 is judging...")
+    print("👨‍⚖️ Gemini 3 is reviewing the footage...")
     client = genai.Client(api_key=GEMINI_KEY)
     
     images = []
     for c in candidates:
-        images.append(PIL.Image.open(c['dark_image']))
+        # We judge based on the FINAL horror image
+        images.append(PIL.Image.open(c['img_horror']))
         
-    prompt = "Pick the SCARIEST and most REALISTIC image. Reply ONLY with the number (1, 2, or 3)."
+    prompt = "Pick the image that looks like the most realistic and terrifying found footage monster. Reply ONLY with number 1, 2, or 3."
     
     try:
         response = client.models.generate_content(
@@ -172,18 +161,10 @@ def pick_winner(candidates):
         print(f"Judge Error: {e}. Defaulting to #1")
         return 0
 
-# --- 7. UPLOADER (YouTube) ---
+# --- 6. UPLOADER (YouTube) ---
 def upload_to_youtube(video_path, title, description, tags):
     print(f"🚀 Uploading: {title}")
-    
-    creds = Credentials(
-        None,
-        refresh_token=YT_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=YT_CLIENT_ID,
-        client_secret=YT_CLIENT_SECRET
-    )
-    
+    creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
     youtube = build("youtube", "v3", credentials=creds)
     
     body = {
@@ -193,10 +174,7 @@ def upload_to_youtube(video_path, title, description, tags):
             "tags": tags.split(','),
             "categoryId": "1"
         },
-        "status": {
-            "privacyStatus": "public", 
-            "selfDeclaredMadeForKids": False
-        }
+        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
     }
     
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
@@ -205,9 +183,8 @@ def upload_to_youtube(video_path, title, description, tags):
     response = None
     while response is None:
         status, response = request.next_chunk()
-        if status:
-            print(f"Uploaded {int(status.progress() * 100)}%")
-            
+        if status: print(f"Uploaded {int(status.progress() * 100)}%")
+    
     print(f"✅ Video ID: {response['id']}")
     return response['id']
 
@@ -215,11 +192,8 @@ def upload_to_youtube(video_path, title, description, tags):
 def notify_group(message):
     if TG_TOKEN and TG_CHAT:
         try:
-            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-            payload = {'chat_id': TG_CHAT, 'text': message}
-            requests.post(url, data=payload)
-        except:
-            pass
+            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data={'chat_id': TG_CHAT, 'text': message})
+        except: pass
 
 # --- MAIN ---
 if __name__ == "__main__":
@@ -229,22 +203,27 @@ if __name__ == "__main__":
     for i in range(3):
         try:
             print(f"\n--- Batch {i+1} ---")
+            # 1. Get Story
             data = get_concept()
-            f_cute, f_dark, f_audio, f_vid = f"cute_{i}.jpg", f"dark_{i}.jpg", f"voice_{i}.mp3", f"vid_{i}.mp4"
             
-            # Create Assets
-            generate_image(data['prompt_cute'], f_cute)
-            generate_image(data['prompt_dark'], f_dark)
-            asyncio.run(make_audio(data['voiceover'], f_audio))
+            # 2. Define Filenames
+            f_norm = f"batch{i}_normal.jpg"
+            f_uncanny = f"batch{i}_uncanny.jpg"
+            f_horror = f"batch{i}_horror.jpg"
+            f_audio = f"batch{i}_voice.mp3"
+            f_vid = f"batch{i}_final.mp4"
             
-            # Animate
-            raw = morph_images(f_cute, f_dark)
+            # 3. Create Assets
+            generate_image(data['prompt_1_normal'], f_norm)
+            generate_image(data['prompt_2_uncanny'], f_uncanny)
+            generate_image(data['prompt_3_horror'], f_horror)
+            asyncio.run(make_audio(data['script'], f_audio))
             
-            # Final Edit
-            assemble_video(raw, f_audio, f_vid)
+            # 4. Edit Video (3-Stage)
+            create_story_video(f_norm, f_uncanny, f_horror, f_audio, f_vid)
             
             candidates.append({
-                "video": f_vid, "dark_image": f_dark,
+                "video": f_vid, "img_horror": f_horror,
                 "title": data['title'], "desc": data['description'], "tags": data['hashtags']
             })
             print("✅ Batch Success")
@@ -257,9 +236,8 @@ if __name__ == "__main__":
         winner_idx = pick_winner(candidates)
         w = candidates[winner_idx]
         print(f"🏆 Selected Batch {winner_idx+1}")
-        
         vid_id = upload_to_youtube(w['video'], w['title'], w['desc'], w['tags'])
-        notify_group(f"💀 New Lore Uploaded!\nTitle: {w['title']}\nLink: https://youtube.com/shorts/{vid_id}")
+        notify_group(f"💀 New Story Uploaded!\nTitle: {w['title']}\nLink: https://youtube.com/shorts/{vid_id}")
     else:
         print("All batches failed.")
         notify_group("⚠️ Bot failed to generate video today.")
