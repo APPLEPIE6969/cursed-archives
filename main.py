@@ -11,11 +11,19 @@ import base64
 import numpy as np
 import fal_client
 from groq import Groq
+
+# --- 🛠️ THE CRITICAL FIX ---
+# MoviePy uses an old command 'ANTIALIAS' that was removed in new Python versions.
+# This block restores it manually so the code doesn't crash.
+import PIL.Image
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+# ---------------------------
+
 from moviepy.editor import *
 
 # NEW Google SDK
 from google import genai
-import PIL.Image
 
 # Google & YouTube Imports
 from google.oauth2.credentials import Credentials
@@ -79,7 +87,7 @@ def generate_image(prompt, filename):
             target_url = url_primary if attempt < 2 else url_backup
             print(f"   🎨 Gen Image ({filename}) - Attempt {attempt+1}...")
             
-            # FIXED: Increased timeout to 120 seconds to prevent "Read timed out"
+            # 120s Timeout
             response = requests.get(target_url, headers=headers, timeout=120)
             
             if response.status_code == 200:
@@ -285,7 +293,6 @@ if __name__ == "__main__":
             generate_image(data['prompt_3_horror'], f_horror)
             asyncio.run(make_audio(data['script'], f_audio))
             
-            # Try Pika, fallback to Local
             horror_element = animate_horror_segment(f_horror, data['prompt_3_horror'])
             if horror_element is None: horror_element = f_horror
             
