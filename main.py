@@ -63,12 +63,27 @@ def generate_image(prompt, filename):
 
 # --- 3. ANIMATOR (FILM) ---
 def morph_images(img1, img2):
-    try:
-        client = Client("jbilcke-hf/film-interpolation")
-    except:
-        client = Client("google/frame-interpolation")
-    return client.predict(img1, img2, 2, api_name="/predict")
-
+    # List of free mirrors to try (in order of reliability)
+    mirrors = [
+        "jbilcke-hf/film-interpolation",
+        "Liaoche/film-interpolation",
+        "docsen/film-interpolation"
+    ]
+    
+    for space in mirrors:
+        try:
+            print(f"Trying Morph Server: {space}...")
+            client = Client(space)
+            # Use the predict API
+            result = client.predict(img1, img2, 2, api_name="/predict")
+            return result
+        except Exception as e:
+            print(f"Server {space} failed: {e}")
+            continue # Try the next one
+            
+    # If all fail, raise an error to restart the batch
+    raise Exception("All Morph servers are busy or down.")
+    
 # --- 4. VOICE ---
 async def make_audio(text, filename):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
