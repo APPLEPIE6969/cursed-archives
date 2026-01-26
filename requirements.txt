@@ -1,9 +1,10 @@
 moviepy==1.0.3
 edge-tts
 groq
-gradio_client
 requests
+pillow
 imageio[ffmpeg]
+imageio[pyav]
 google-genai
 google-auth
 google-auth-oauthlib
