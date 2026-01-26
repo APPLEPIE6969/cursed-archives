@@ -2,7 +2,7 @@ moviepy==1.0.3
 edge-tts
 groq
 requests
-pillow
+pillow==9.5.0
 fal-client
 imageio[ffmpeg]
 imageio[pyav]
