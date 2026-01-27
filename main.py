@@ -34,7 +34,7 @@ HF_TOKEN = get_secret("HF_TOKEN")
 # --- 1. BRAIN ---
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
-    prompt = "Generate a 'Cursed/Found Footage' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (as a single string)."
+    prompt = "Generate a 'Cursed/Found Footage' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (provide as a single string separated by spaces)."
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
@@ -45,7 +45,7 @@ def get_concept():
 # --- 2. IMAGE GENERATOR (Fixed Pollinations URL) ---
 def generate_image(prompt, filename, max_retries=3):
     seed = random.randint(0, 999999)
-    # The most stable 2026 Pollinations URL structure
+    # Switched back to the most stable direct endpoint
     clean_prompt = urllib.parse.quote(prompt[:250])
     url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&nologo=true"
     
@@ -61,21 +61,20 @@ def generate_image(prompt, filename, max_retries=3):
             print(f"⚠️ Image Error: {e}")
             time.sleep(5)
     
-    # Emergency Fallback
+    # Fallback: Dark image so the video doesn't crash
     PIL.Image.new('RGB', (720, 1280), (20, 20, 20)).save(filename)
     return filename
 
-# --- 3. VIDEO GENERATOR (Fixed API Name Error) ---
+# --- 3. VIDEO GENERATOR (Positional API fix) ---
 def animate_wan_with_retry(horror_prompt, max_retries=2):
     print(f"🎬 Connecting to Wan-AI/Wan2.1...")
     for attempt in range(max_retries):
         try:
             client = Client("Wan-AI/Wan2.1", token=HF_TOKEN)
-            # We use positional arguments instead of api_name='/predict' 
-            # as some versions of this space have unnamed endpoints
+            # Using positional arguments instead of api_name to avoid mapping errors
             result = client.predict(
-                f"found footage horror, grainy, {horror_prompt}", # prompt
-                "bright, clean, 4k", # negative_prompt
+                f"found footage horror, grainy vhs, {horror_prompt}", # prompt
+                "bright, clean, 4k, cheerful", # negative_prompt
                 5.0, # guide_scale
                 30,  # num_inference_steps
             )
@@ -87,7 +86,7 @@ def animate_wan_with_retry(horror_prompt, max_retries=2):
             time.sleep(30)
     return None
 
-# --- 4. EDITOR ---
+# --- 4. EDITOR (Refined Subclipping) ---
 def create_story_video(img1, img2, video_clip, audio_path, output_filename):
     audio = AudioFileClip(audio_path)
     d = audio.duration
@@ -96,8 +95,8 @@ def create_story_video(img1, img2, video_clip, audio_path, output_filename):
     c2 = ImageClip(img2).set_duration(d*0.3 + 1).resize(lambda t: 1+0.06*t).set_position('center').set_start(d*0.3).crossfadein(1)
     
     if video_clip and os.path.exists(video_clip):
-        # Clip the climax video to fit the remaining time
         c3 = VideoFileClip(video_clip).resize(height=1280).set_start(d*0.6).crossfadein(0.5)
+        # Ensure the clip doesn't exceed the audio length
         if c3.duration > (d * 0.4):
             c3 = c3.subclip(0, d * 0.4 + 1)
         if c3.w > 720: 
@@ -106,20 +105,20 @@ def create_story_video(img1, img2, video_clip, audio_path, output_filename):
         c3 = ImageClip(img2).set_duration(d*0.4 + 1).resize(lambda t: 1+0.15*t).set_start(d*0.6).crossfadein(0.5)
 
     final = CompositeVideoClip([c1, c2, c3], size=(720, 1280)).set_duration(d).set_audio(audio)
-    final.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
+    final.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac')
     return output_filename
 
 async def make_audio(text, filename):
     await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
 
-# --- 5. UPLOADER (Fixed Split Error) ---
+# --- 5. UPLOADER (Fixed Type Check) ---
 def upload_to_youtube(video_path, title, description, tags):
-    # Fix for the 'list' has no attribute 'split' error
+    # Fix for 'list' object has no attribute 'split'
     if isinstance(tags, list):
         tag_list = tags
         tag_str = " ".join(tags)
     else:
-        tag_list = tags.split(',')
+        tag_list = [t.strip() for t in tags.split(',') if t.strip()]
         tag_str = tags
 
     creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
@@ -128,10 +127,10 @@ def upload_to_youtube(video_path, title, description, tags):
         "snippet": {
             "title": title[:100], 
             "description": f"{description}\n\n{tag_str}", 
-            "tags": tag_list, 
+            "tags": tag_list[:20], 
             "categoryId": "1"
         }, 
-        "status": {"privacyStatus": "public"}
+        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
     }
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
     res = service.videos().insert(part="snippet,status", body=body, media_body=media).execute()
