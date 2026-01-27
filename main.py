@@ -8,9 +8,8 @@ import re
 import urllib.parse
 import io
 import json
-import numpy as np
 import shutil
-from gradio_client import Client, handle_file
+from gradio_client import Client
 from groq import Groq
 import PIL.Image
 
@@ -32,16 +31,12 @@ GROQ_KEY = get_secret("GROQ_API_KEY")
 YT_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
 YT_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
 YT_REFRESH_TOKEN = get_secret("YOUTUBE_REFRESH_TOKEN")
-HF_TOKEN = get_secret("HF_TOKEN") # Highly recommended to avoid rate limits
+HF_TOKEN = get_secret("HF_TOKEN") 
 
 # --- 1. BRAIN (Groq) ---
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
-    prompt = """
-    Generate a 'Cursed/Dark Fantasy' YouTube Short script.
-    Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags'.
-    Character: Pick a popular character (SpongeBob, Shrek, Mickey) and make it look like 'found footage' horror.
-    """
+    prompt = "Generate a 'Cursed/Found Footage' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags'."
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
@@ -49,7 +44,7 @@ def get_concept():
     )
     return json.loads(completion.choices[0].message.content)
 
-# --- 2. ARTIST (Pollinations) ---
+# --- 2. ARTIST (Pollinations for Intro/Mid Clips) ---
 def generate_image(prompt, filename):
     seed = random.randint(0, 999999)
     clean_prompt = urllib.parse.quote(prompt[:300])
@@ -58,48 +53,47 @@ def generate_image(prompt, filename):
     with open(filename, "wb") as f: f.write(res.content)
     return filename
 
-# --- 3. ANIMATOR (Free Wan 2.1 Gradio) ---
-def animate_wan_free(image_path, prompt):
-    print(f"🎬 Connecting to Wan 2.1 Free Space...")
+# --- 3. ANIMATOR (Wan2.1 Text-to-Video) ---
+def animate_wan_t2v(horror_prompt):
+    print(f"🎬 Connecting to Wan2.1 Text-to-Video Space...")
     try:
-        # Using the Wan-AI official 14B I2V Space
-        client = Client("Wan-AI/Wan2.1-I2V-14B-720P", token=HF_TOKEN)
+        # Connecting to the specific space you provided
+        client = Client("Wan-AI/Wan2.1", token=HF_TOKEN)
         
-        # We use handle_file to properly upload the local image to the Space
+        # This space expects specific inputs for T2V
         result = client.predict(
-            input_image=handle_file(image_path),
-            prompt=f"found footage horror, grainy, dark, shaky camera, {prompt}",
+            prompt=f"Found footage, grainy VHS, horror, {horror_prompt}",
             api_name="/predict"
         )
         
-        # Result is usually a dictionary or path; Wan space usually returns path directly
-        video_filename = f"wan_gen_{int(time.time())}.mp4"
+        # Result is the path to the generated .mp4
+        video_filename = f"wan_climax_{int(time.time())}.mp4"
         shutil.copy(result, video_filename)
         return video_filename
     except Exception as e:
         print(f"⚠️ Video Generation Failed: {e}")
         return None
 
-# --- 4. EDITOR (Cinematic Assemble) ---
-def create_story_video(img1, img2, horror_element, audio_path, output_filename):
+# --- 4. EDITOR (Combining Images + Wan Video) ---
+def create_story_video(img1, img2, video_clip, audio_path, output_filename):
     audio = AudioFileClip(audio_path)
     d = audio.duration
     
-    # Timing: 30% normal, 30% uncanny, 40% horror
+    # 30% Normal Image, 30% Uncanny Image
     c1 = ImageClip(img1).set_duration(d*0.3 + 1).resize(lambda t: 1+0.05*t).set_position('center')
     c2 = ImageClip(img2).set_duration(d*0.3 + 1).resize(lambda t: 1+0.08*t).set_position('center').set_start(d*0.3).crossfadein(1)
     
-    if horror_element and horror_element.endswith(".mp4"):
-        c3 = VideoFileClip(horror_element).fx(vfx.loop, duration=d*0.4 + 1).resize(height=1280).set_start(d*0.6).crossfadein(0.5)
-        # Crop 16:9 to 9:16
+    # Final 40% is the Wan-AI Video
+    if video_clip:
+        c3 = VideoFileClip(video_clip).fx(vfx.loop, duration=d*0.4 + 1).resize(height=1280).set_start(d*0.6).crossfadein(0.5)
         if c3.w > 720: 
             c3 = c3.crop(x1=c3.w/2 - 360, width=720)
     else:
-        # Fallback to shaking image if video fails
-        c3 = ImageClip(horror_element).set_duration(d*0.4 + 1).resize(lambda t: 1+0.2*t).set_start(d*0.6).crossfadein(0.5)
+        # Static fallback if video fails
+        c3 = ImageClip(img2).set_duration(d*0.4 + 1).set_start(d*0.6)
 
     final = CompositeVideoClip([c1, c2, c3], size=(720, 1280)).set_duration(d).set_audio(audio)
-    final.write_videofile(output_filename, fps=24, codec='libx264', preset='ultrafast', logger=None)
+    final.write_videofile(output_filename, fps=24, codec='libx264', preset='ultrafast')
     return output_filename
 
 async def make_audio(text, filename):
@@ -108,10 +102,7 @@ async def make_audio(text, filename):
 def upload_to_youtube(video_path, title, description, tags):
     creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
     service = build("youtube", "v3", credentials=creds)
-    body = {
-        "snippet": {"title": title, "description": f"{description}\n\n{tags}", "tags": tags.split(','), "categoryId": "1"},
-        "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False}
-    }
+    body = {"snippet": {"title": title, "description": f"{description}\n\n{tags}", "tags": tags.split(','), "categoryId": "1"}, "status": {"privacyStatus": "public"}}
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
     res = service.videos().insert(part="snippet,status", body=body, media_body=media).execute()
     return res['id']
@@ -119,25 +110,20 @@ def upload_to_youtube(video_path, title, description, tags):
 if __name__ == "__main__":
     try:
         data = get_concept()
-        print(f"📝 Concept: {data['title']}")
-        
-        # Files
-        f_norm, f_uncanny, f_horror, f_audio, f_vid = "n.jpg", "u.jpg", "h.jpg", "v.mp3", "final.mp4"
+        f_norm, f_uncanny, f_audio, f_vid = "n.jpg", "u.jpg", "v.mp3", "final.mp4"
         
         generate_image(data['prompt_1_normal'], f_norm)
         generate_image(data['prompt_2_uncanny'], f_uncanny)
-        generate_image(data['prompt_3_horror'], f_horror)
         asyncio.run(make_audio(data['script'], f_audio))
         
-        # Animate the horror part
-        video_clip = animate_wan_free(f_horror, data['prompt_3_horror'])
+        # Generate the video climax using the Wan-AI space
+        video_clip = animate_wan_t2v(data['prompt_3_horror'])
         
-        # Assemble
-        final_path = create_story_video(f_norm, f_uncanny, video_clip or f_horror, f_audio, f_vid)
+        # Create final video
+        final_path = create_story_video(f_norm, f_uncanny, video_clip, f_audio, f_vid)
         
         # Upload
         vid_id = upload_to_youtube(final_path, data['title'], data['description'], data['hashtags'])
-        print(f"🚀 Uploaded: https://youtube.com/shorts/{vid_id}")
-        
+        print(f"🚀 Success: https://youtube.com/shorts/{vid_id}")
     except Exception as e:
-        print(f"❌ Main Execution Failed: {e}")
+        print(f"❌ Error: {e}")
