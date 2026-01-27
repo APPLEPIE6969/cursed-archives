@@ -1,0 +1,25 @@
+name: Download Wan 2.2
+on: 
+  workflow_dispatch: # Allows you to start it manually
+
+jobs:
+  download-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install HF CLI
+        run: pip install -U "huggingface_hub[cli]"
+
+      - name: Download Model
+        # This downloads the 8GB version so the machine doesn't crash
+        run: |
+          mkdir -p ./models
+          huggingface-cli download Kijai/Wan2.2-GGUF \
+            --include "Wan2.2-T2V-14B-GGUF_Q4_K_M.gguf" \
+            --local-dir ./models \
+            --local-dir-use-symlinks False
+
+      - name: List Files
+        run: ls -R ./models
