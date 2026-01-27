@@ -7,21 +7,52 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120 # Increased time because video gen + queue can take a while
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4 # Updated to v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          # UPDATED: Using Python 3.12 to avoid Google deprecation warnings
           python-version: '3.12' 
       
       - name: Install Tools
         run: |
           sudo apt-get update
-          sudo apt-get install ffmpeg
+          sudo apt-get install -y ffmpeg
           pip install -r requirements.txt
+          pip install gradio_client # Added for Wan 2.2 API access
           
-      - name: Run Bot
+      - name: Generate Cursed Video (Wan 2.2)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }} # Recommended to avoid rate limits
+        run: |
+          python -c "
+          from gradio_client import Client
+          import shutil
+          import os
+
+          # Connect to the Wan 2.2 Space
+          client = Client('SRMohitkumar/Wan2.2-space', token=os.environ.get('HF_TOKEN'))
+
+          print('Generating cursed video via Wan 2.2...')
+          
+          # The API signature for Wan 2.2 typically requires these parameters
+          # You can adjust the prompt logic to pull from your script
+          result = client.predict(
+              prompt='A disturbing, glitchy VHS recording of a dark hallway with flickering lights, cursed archives style',
+              negative_prompt='bright, cheerful, clean, high quality, 4k',
+              guide_scale=5.0,
+              num_inference_steps=30,
+              api_name='/predict'
+          )
+
+          # Move the generated file to your main folder for the bot to find
+          shutil.move(result, 'cursed_video.mp4')
+          print('Video saved as cursed_video.mp4')
+          "
+
+      - name: Run Bot (Uploader)
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
