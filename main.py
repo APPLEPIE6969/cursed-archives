@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 from gradio_client import Client, handle_file
 
-# --- CRITICAL FIXES ---
+# --- CRITICAL MOVIEPY FIX ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
@@ -18,16 +18,15 @@ client_gemini = genai.Client(api_key=GEMINI_KEY)
 def generate_voice(text, filename="voice.wav"):
     print(f"🎙️ Chatterbox is narrating...")
     try:
-        # 2026 Multilingual endpoint
         client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
         
-        # API expects: (text, language, speed, exaggeration)
-        # Your previous error was because the script was in the 'language' slot.
+        # FIX: The API order is (text, language_code, speed, exaggeration)
+        # We pass "en" specifically so it doesn't try to use the script as a language.
         result = client.predict(
             text,           # text_input
-            "en",           # language (MUST be 2-letter code)
+            "en",           # language_id (Must be 2-letter code)
             0.5,            # speed
-            0.8,            # exaggeration
+            0.8,            # exaggeration (higher = more horror)
             fn_index=0      
         )
         
@@ -39,7 +38,7 @@ def generate_voice(text, filename="voice.wav"):
         print(f"❌ Voice Error: {e}")
         return None
 
-# --- 2. IMAGE GEN (Pollinations Flux) ---
+# --- 2. IMAGE GEN ---
 def generate_horror_image(prompt, filename):
     print(f"🎨 Creating: {filename}")
     try:
@@ -53,47 +52,32 @@ def generate_horror_image(prompt, filename):
     except: pass
     return None
 
-# --- 3. ANIMATION (FramePack-F1) ---
+# --- 3. ANIMATION ---
 def animate_horror(image_path, index):
     print(f"🎬 Animating segment {index}...")
     try:
         client = Client("linoyts/FramePack-F1")
-        result = client.predict(
-            handle_file(image_path), 
-            "slow eerie movement", 
-            fn_index=0
-        )
+        result = client.predict(handle_file(image_path), "eerie movement", fn_index=0)
         out_vid = f"vid_{index}.mp4"
         shutil.copy(result, out_vid)
         return os.path.abspath(out_vid)
-    except Exception as e:
-        print(f"⚠️ Animation failed: {e}")
-        return None
+    except: return None
 
 # --- 4. MAIN PIPELINE ---
 async def main():
-    # A. Get Content from Gemini 3
-    # Note: Use ThinkingConfig for better horror writing
-    response = client_gemini.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents="Choose 2 Disney characters and write a 20-word scary found footage script. Give me 2 separate image prompts for them.",
-        config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(include_thoughts=False),
-            thinking_level="high"
-        )
-    )
-    
-    # Mocking structure for logic - in real use, parse the JSON from response.text
+    # A. Get Content
     data = {
-        "script": "The archives hold a truth we were never meant to see. Mickey is waiting... in the dark.",
-        "prompts": ["Horror Mickey Mouse found footage", "Scary Minnie Mouse dark eyes"]
+        "script": "The basement was never empty [gasp]. Mickey's eyes followed me. They weren't plastic. They were wet [laugh].",
+        "prompts": ["Horror Mickey Mouse dark basement", "Scary Pikachu glowing eyes"]
     }
 
     # B. Generate Voice
     audio_path = generate_voice(data['script'])
+    
+    # SAFETY GUARD: If audio_path is None, stop before MoviePy crashes
     if not audio_path:
-        print("🛑 Voice generation failed. Stopping to prevent MoviePy crash.")
-        return
+        print("🛑 Critical Error: Voice generation failed. Check Hugging Face Space status.")
+        return 
 
     audio_clip = AudioFileClip(audio_path)
     clip_duration = audio_clip.duration / len(data['prompts'])
@@ -105,7 +89,6 @@ async def main():
         if not img: continue
         
         vid = animate_horror(img, i)
-        
         if vid and os.path.exists(vid):
             c = VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280)
         else:
@@ -118,9 +101,7 @@ async def main():
         video = concatenate_videoclips(final_clips, method="compose")
         video = video.set_audio(audio_clip)
         video.write_videofile("output_short.mp4", fps=24, codec="libx264", audio_codec="aac")
-        print("✅ Success: output_short.mp4 created.")
-    else:
-        print("❌ Failed to create any video clips.")
+        print("✅ Finished: output_short.mp4")
 
 if __name__ == "__main__":
     asyncio.run(main())
