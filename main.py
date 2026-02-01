@@ -1,12 +1,13 @@
 import os, random, requests, asyncio, time, urllib.parse, shutil, re, json
 import PIL.Image
 import numpy as np
+import edge_tts
 from moviepy.editor import *
 from google import genai
 from google.genai import types
 from gradio_client import Client, handle_file
 
-# --- MOVIEPY FIX ---
+# --- MOVIEPY COMPATIBILITY ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
@@ -14,38 +15,42 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 client_gemini = genai.Client(api_key=GEMINI_KEY)
 
-# --- 1. CHATTERBOX (Fixed Parameter Mapping) ---
-def generate_voice(text, lang_code="en", filename="voice.wav"):
-    # Clean brackets just in case
+# --- 1. VOICE ENGINE (With Fallback) ---
+async def generate_voice_with_fallback(text, lang_code="en", filename="voice.mp3"):
     clean_text = re.sub(r'\[.*?\]', '', text).strip()
-    print(f"🎙️ Chatterbox Attempt: Text='{clean_text[:30]}...', Lang='{lang_code}'")
     
+    # --- PRIMARY: Chatterbox ---
+    print(f"🎙️ PRIMARY: Attempting Chatterbox (Emotional AI)...")
     try:
         client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
-        
-        # We use a list for arguments. 
-        # BASED ON THE ERROR: 
-        # Slot 0 = Text
-        # Slot 1 = Language Choice (This is where your script was accidentally going)
-        # Slot 2 = Speed
-        # Slot 3 = Exaggeration
         result = client.predict(
-            clean_text,     # arg 0
-            lang_code,      # arg 1 (This MUST be 'en')
-            0.5,            # arg 2
-            0.8,            # arg 3
+            clean_text,     # arg 0: Text
+            lang_code,      # arg 1: Language ('en')
+            0.5,            # arg 2: Speed
+            0.8,            # arg 3: Exaggeration
             fn_index=0      
         )
-        
         if result and os.path.exists(result):
             shutil.copy(result, filename)
+            print("✅ Chatterbox Success!")
             return os.path.abspath(filename)
-        return None
     except Exception as e:
-        print(f"❌ Voice Error: {e}")
+        print(f"⚠️ Chatterbox Failed: {e}")
+
+    # --- SECONDARY: Edge-TTS Fallback ---
+    print(f"🎙️ SECONDARY: Attempting Edge-TTS Fallback...")
+    try:
+        # Using a deep, slightly eerie voice for horror
+        voice = "en-US-ChristopherNeural" 
+        communicate = edge_tts.Communicate(clean_text, voice, rate="+0%", pitch="-10Hz")
+        await communicate.save(filename)
+        print("✅ Edge-TTS Fallback Success!")
+        return os.path.abspath(filename)
+    except Exception as e:
+        print(f"❌ Both Voice Engines Failed: {e}")
         return None
 
-# --- 2. IMAGE & ANIMATION (Standard logic) ---
+# --- 2. IMAGE & ANIMATION ---
 def generate_horror_image(prompt, filename):
     try:
         url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=720&height=1280&model=flux"
@@ -65,11 +70,10 @@ def animate_horror(image_path, index):
 
 # --- 3. MAIN PIPELINE ---
 async def main():
-    # Strict Prompt to Gemini
+    # Prompt Gemini for Content
     prompt_text = (
-        "Choose 2 random characters from Disney or Nintendo. "
-        "Write a 20-word scary found footage script. Do NOT use brackets []. "
-        "Return JSON: {'lang': 'en', 'script': '...', 'prompts': ['...', '...']}"
+        "Pick 2 iconic characters. Write a 20-word scary found footage script. "
+        "No brackets []. Return JSON: {'lang': 'en', 'script': '...', 'prompts': ['...', '...']}"
     )
     
     try:
@@ -80,14 +84,13 @@ async def main():
         )
         data = json.loads(response.text)
     except:
-        # Emergency Fallback if Gemini fails
-        data = {"lang": "en", "script": "He is watching from the shadows.", "prompts": ["horror monster"]}
+        data = {"lang": "en", "script": "It's standing right behind you.", "prompts": ["horror monster"]}
 
-    # Generate Voice with the verified 'en' code
-    audio_path = generate_voice(data['script'], data.get('lang', 'en'))
+    # Generate Voice (with logic to switch to Edge-TTS if Chatterbox fails)
+    audio_path = await generate_voice_with_fallback(data['script'], data.get('lang', 'en'))
     
     if not audio_path:
-        print("🛑 STOPPING: Voice failed again. Check the 'en' parameter.")
+        print("🛑 STOPPING: No voice generated.")
         return 
 
     audio_clip = AudioFileClip(audio_path)
@@ -98,13 +101,15 @@ async def main():
         img = generate_horror_image(p, f"img_{i}.jpg")
         if img:
             vid = animate_horror(img, i)
-            if vid: clips.append(VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280))
-            else: clips.append(ImageClip(img).set_duration(clip_duration).resize(lambda t: 1+0.05*t).set_fps(24))
+            if vid:
+                clips.append(VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280))
+            else:
+                clips.append(ImageClip(img).set_duration(clip_duration).resize(lambda t: 1+0.05*t).set_fps(24))
 
     if clips:
         video = concatenate_videoclips(clips, method="compose").set_audio(audio_clip)
         video.write_videofile("output_short.mp4", fps=24, codec="libx264")
-        print("✅ SUCCESS!")
+        print("✅ SUCCESS: output_short.mp4 created!")
 
 if __name__ == "__main__":
     asyncio.run(main())
