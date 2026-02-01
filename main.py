@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 from gradio_client import Client, handle_file
 
-# --- CRITICAL MOVIEPY FIX ---
+# --- CRITICAL FIXES ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
@@ -14,20 +14,21 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 client_gemini = genai.Client(api_key=GEMINI_KEY)
 
-# --- 1. CHATTERBOX (Emotional Voice) ---
+# --- 1. CHATTERBOX (Multilingual Emotional Voice) ---
 def generate_voice(text, filename="voice.wav"):
     print(f"🎙️ Chatterbox is narrating...")
     try:
+        # Use the Multilingual endpoint
         client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
         
-        # FIX: The API order is (text, language_code, speed, exaggeration)
-        # We pass "en" specifically so it doesn't try to use the script as a language.
+        # FIX: The Multilingual API expects (Text, Language, Speed, Exaggeration)
+        # We explicitly set "en" (English) as the second argument.
         result = client.predict(
-            text,           # text_input
-            "en",           # language_id (Must be 2-letter code)
-            0.5,            # speed
-            0.8,            # exaggeration (higher = more horror)
-            fn_index=0      
+            text,           # 1. The Text to speak
+            "en",           # 2. Language Code (Must be 'en' for English)
+            0.5,            # 3. Speed (0.5 is normal/clear)
+            0.8,            # 4. Exaggeration (0.8 adds horror emotion)
+            fn_index=0      # Targeted call for reliability
         )
         
         if result and os.path.exists(result):
@@ -57,7 +58,7 @@ def animate_horror(image_path, index):
     print(f"🎬 Animating segment {index}...")
     try:
         client = Client("linoyts/FramePack-F1")
-        result = client.predict(handle_file(image_path), "eerie movement", fn_index=0)
+        result = client.predict(handle_file(image_path), "scary jittery movement", fn_index=0)
         out_vid = f"vid_{index}.mp4"
         shutil.copy(result, out_vid)
         return os.path.abspath(out_vid)
@@ -65,7 +66,7 @@ def animate_horror(image_path, index):
 
 # --- 4. MAIN PIPELINE ---
 async def main():
-    # A. Get Content
+    # A. Content Data
     data = {
         "script": "The basement was never empty [gasp]. Mickey's eyes followed me. They weren't plastic. They were wet [laugh].",
         "prompts": ["Horror Mickey Mouse dark basement", "Scary Pikachu glowing eyes"]
@@ -74,15 +75,15 @@ async def main():
     # B. Generate Voice
     audio_path = generate_voice(data['script'])
     
-    # SAFETY GUARD: If audio_path is None, stop before MoviePy crashes
+    # SAFETY GUARD: Prevents the MoviePy crash if AI fails
     if not audio_path:
-        print("🛑 Critical Error: Voice generation failed. Check Hugging Face Space status.")
+        print("🛑 Critical Error: Voice generation failed. Stopping script.")
         return 
 
     audio_clip = AudioFileClip(audio_path)
     clip_duration = audio_clip.duration / len(data['prompts'])
 
-    # C. Generate & Animate Clips
+    # C. Build Video Clips
     final_clips = []
     for i, p in enumerate(data['prompts']):
         img = generate_horror_image(p, f"img_{i}.jpg")
@@ -92,16 +93,17 @@ async def main():
         if vid and os.path.exists(vid):
             c = VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280)
         else:
+            # Fallback Zoom Effect
             c = (ImageClip(img).set_duration(clip_duration)
-                 .resize(lambda t: 1 + 0.04*t).set_fps(24))
+                 .resize(lambda t: 1 + 0.05*t).set_fps(24))
         final_clips.append(c)
 
-    # D. Final Merge
+    # D. Render
     if final_clips:
         video = concatenate_videoclips(final_clips, method="compose")
         video = video.set_audio(audio_clip)
         video.write_videofile("output_short.mp4", fps=24, codec="libx264", audio_codec="aac")
-        print("✅ Finished: output_short.mp4")
+        print("✅ SUCCESS: Video saved as output_short.mp4")
 
 if __name__ == "__main__":
     asyncio.run(main())
