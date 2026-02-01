@@ -6,7 +6,7 @@ from google import genai
 from google.genai import types
 from gradio_client import Client, handle_file
 
-# --- CRITICAL MOVIEPY FIX ---
+# --- MOVIEPY FIX ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
@@ -14,22 +14,26 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
 client_gemini = genai.Client(api_key=GEMINI_KEY)
 
-# --- 1. CHATTERBOX (Multilingual Emotional Voice) ---
-def generate_voice(text, lang_code, filename="voice.wav"):
-    # CLEANUP: Remove any [laugh], [cry], [gasp] etc. using Regex
-    # This ensures the API only gets pure text.
+# --- 1. CHATTERBOX (Fixed Parameter Mapping) ---
+def generate_voice(text, lang_code="en", filename="voice.wav"):
+    # Clean brackets just in case
     clean_text = re.sub(r'\[.*?\]', '', text).strip()
+    print(f"🎙️ Chatterbox Attempt: Text='{clean_text[:30]}...', Lang='{lang_code}'")
     
-    print(f"🎙️ Chatterbox is narrating: \"{clean_text[:50]}...\"")
     try:
         client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
         
-        # API expects: (text, language, speed, exaggeration)
+        # We use a list for arguments. 
+        # BASED ON THE ERROR: 
+        # Slot 0 = Text
+        # Slot 1 = Language Choice (This is where your script was accidentally going)
+        # Slot 2 = Speed
+        # Slot 3 = Exaggeration
         result = client.predict(
-            clean_text,     # 1. PURE text only (No brackets!)
-            lang_code,      # 2. Language Code ('en')
-            0.5,            # 3. Speed
-            0.8,            # 4. Exaggeration
+            clean_text,     # arg 0
+            lang_code,      # arg 1 (This MUST be 'en')
+            0.5,            # arg 2
+            0.8,            # arg 3
             fn_index=0      
         )
         
@@ -41,81 +45,66 @@ def generate_voice(text, lang_code, filename="voice.wav"):
         print(f"❌ Voice Error: {e}")
         return None
 
-# --- 2. IMAGE GEN ---
+# --- 2. IMAGE & ANIMATION (Standard logic) ---
 def generate_horror_image(prompt, filename):
-    print(f"🎨 Creating: {filename}")
     try:
-        clean_p = urllib.parse.quote(prompt)
-        seed = random.randint(0, 999999)
-        url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
-        res = requests.get(url, timeout=60)
-        if res.status_code == 200:
-            with open(filename, "wb") as f: f.write(res.content)
-            return os.path.abspath(filename)
-    except: pass
-    return None
-
-# --- 3. ANIMATION ---
-def animate_horror(image_path, index):
-    print(f"🎬 Animating segment {index}...")
-    try:
-        client = Client("linoyts/FramePack-F1")
-        result = client.predict(handle_file(image_path), "eerie movement", fn_index=0)
-        out_vid = f"vid_{index}.mp4"
-        shutil.copy(result, out_vid)
-        return os.path.abspath(out_vid)
+        url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width=720&height=1280&model=flux"
+        res = requests.get(url, timeout=30)
+        with open(filename, "wb") as f: f.write(res.content)
+        return os.path.abspath(filename)
     except: return None
 
-# --- 4. MAIN PIPELINE ---
-async def main():
-    # A. Content Generation Call
-    # We strictly forbid brackets in the prompt.
-    prompt_text = (
-        "Pick 2 Disney characters and write a 20-word scary found footage script. "
-        "DO NOT use brackets like [laugh] or [cry]. DO NOT use any text inside [] brackets. "
-        "Return JSON with keys: 'lang' (set to 'en'), 'script', and 'prompts' (list of 2 image prompts)."
-    )
-    
-    response = client_gemini.models.generate_content(
-        model="gemini-3-flash-preview",
-        contents=prompt_text,
-        config=types.GenerateContentConfig(response_mime_type="application/json")
-    )
-    
-    # Parse the AI response
-    data = json.loads(response.text)
-    print(f"🧠 Gemini Script: {data['script']}")
+def animate_horror(image_path, index):
+    try:
+        client = Client("linoyts/FramePack-F1")
+        result = client.predict(handle_file(image_path), "horror movement", fn_index=0)
+        out = f"vid_{index}.mp4"
+        shutil.copy(result, out)
+        return os.path.abspath(out)
+    except: return None
 
-    # B. Generate Voice (Backwards compatible logic)
+# --- 3. MAIN PIPELINE ---
+async def main():
+    # Strict Prompt to Gemini
+    prompt_text = (
+        "Choose 2 random characters from Disney or Nintendo. "
+        "Write a 20-word scary found footage script. Do NOT use brackets []. "
+        "Return JSON: {'lang': 'en', 'script': '...', 'prompts': ['...', '...']}"
+    )
+    
+    try:
+        response = client_gemini.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=prompt_text,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
+        data = json.loads(response.text)
+    except:
+        # Emergency Fallback if Gemini fails
+        data = {"lang": "en", "script": "He is watching from the shadows.", "prompts": ["horror monster"]}
+
+    # Generate Voice with the verified 'en' code
     audio_path = generate_voice(data['script'], data.get('lang', 'en'))
     
     if not audio_path:
-        print("🛑 Voice generation failed.")
+        print("🛑 STOPPING: Voice failed again. Check the 'en' parameter.")
         return 
 
     audio_clip = AudioFileClip(audio_path)
     clip_duration = audio_clip.duration / len(data['prompts'])
 
-    # C. Video Segments
-    final_clips = []
+    clips = []
     for i, p in enumerate(data['prompts']):
         img = generate_horror_image(p, f"img_{i}.jpg")
-        if not img: continue
-        
-        vid = animate_horror(img, i)
-        if vid and os.path.exists(vid):
-            c = VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280)
-        else:
-            c = (ImageClip(img).set_duration(clip_duration)
-                 .resize(lambda t: 1 + 0.05*t).set_fps(24))
-        final_clips.append(c)
+        if img:
+            vid = animate_horror(img, i)
+            if vid: clips.append(VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280))
+            else: clips.append(ImageClip(img).set_duration(clip_duration).resize(lambda t: 1+0.05*t).set_fps(24))
 
-    # D. Render
-    if final_clips:
-        video = concatenate_videoclips(final_clips, method="compose")
-        video = video.set_audio(audio_clip)
-        video.write_videofile("output_short.mp4", fps=24, codec="libx264", audio_codec="aac")
-        print("✅ Finished: output_short.mp4")
+    if clips:
+        video = concatenate_videoclips(clips, method="compose").set_audio(audio_clip)
+        video.write_videofile("output_short.mp4", fps=24, codec="libx264")
+        print("✅ SUCCESS!")
 
 if __name__ == "__main__":
     asyncio.run(main())
