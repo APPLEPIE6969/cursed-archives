@@ -1,14 +1,9 @@
 moviepy==1.0.3
-edge-tts
-groq
 requests
 pillow
-fal-client
-imageio[ffmpeg]
-imageio[pyav]
 google-genai
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
 google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
 gradio_client
+numpy
