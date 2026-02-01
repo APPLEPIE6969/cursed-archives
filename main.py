@@ -1,107 +1,156 @@
-import os, random, requests, asyncio, time, urllib.parse, shutil
+import os
+import random
+import requests
+import asyncio
+import edge_tts
+import time
+import json
+import shutil
+import urllib.parse
+from gradio_client import Client
+from groq import Groq
 import PIL.Image
-import numpy as np
-from moviepy.editor import *
-from google import genai
-from google.genai import types
-from gradio_client import Client, handle_file
 
-# --- CRITICAL MOVIEPY FIX ---
+# --- 🛠️ COMPATIBILITY FIX ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
-# --- CONFIG ---
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-client_gemini = genai.Client(api_key=GEMINI_KEY)
+from moviepy.editor import *
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
-# --- 1. CHATTERBOX (Emotional Voice) ---
-def generate_voice(text, filename="voice.wav"):
-    print(f"🎙️ Chatterbox is narrating...")
-    try:
-        client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
-        
-        # FIX: The API order is (text, language_code, speed, exaggeration)
-        # We pass "en" specifically so it doesn't try to use the script as a language.
-        result = client.predict(
-            text,           # text_input
-            "en",           # language_id (Must be 2-letter code)
-            0.5,            # speed
-            0.8,            # exaggeration (higher = more horror)
-            fn_index=0      
-        )
-        
-        if result and os.path.exists(result):
-            shutil.copy(result, filename)
-            return os.path.abspath(filename)
-        return None
-    except Exception as e:
-        print(f"❌ Voice Error: {e}")
-        return None
+# --- CONFIGURATION ---
+def get_secret(key):
+    val = os.environ.get(key)
+    return val.strip() if val else ""
 
-# --- 2. IMAGE GEN ---
-def generate_horror_image(prompt, filename):
-    print(f"🎨 Creating: {filename}")
-    try:
-        clean_p = urllib.parse.quote(prompt)
-        seed = random.randint(0, 999999)
-        url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
-        res = requests.get(url, timeout=60)
-        if res.status_code == 200:
-            with open(filename, "wb") as f: f.write(res.content)
-            return os.path.abspath(filename)
-    except: pass
+GROQ_KEY = get_secret("GROQ_API_KEY")
+YT_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
+YT_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
+YT_REFRESH_TOKEN = get_secret("YOUTUBE_REFRESH_TOKEN")
+HF_TOKEN = get_secret("HF_TOKEN") 
+
+# --- 1. BRAIN ---
+def get_concept():
+    client = Groq(api_key=GROQ_KEY)
+    prompt = "Generate a 'Cursed/Found Footage' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (as a single string)."
+    completion = client.chat.completions.create(
+        messages=[{"role": "user", "content": prompt}],
+        model="llama-3.3-70b-versatile",
+        response_format={"type": "json_object"}
+    )
+    return json.loads(completion.choices[0].message.content)
+
+# --- 2. IMAGE GENERATOR (Fixed Pollinations URL) ---
+def generate_image(prompt, filename, max_retries=3):
+    seed = random.randint(0, 999999)
+    # The most stable 2026 Pollinations URL structure
+    clean_prompt = urllib.parse.quote(prompt[:250])
+    url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=720&height=1280&seed={seed}&nologo=true"
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"🎨 Generating Image: {filename} (Attempt {attempt+1})...")
+            res = requests.get(url, timeout=60)
+            res.raise_for_status()
+            with open(filename, "wb") as f: 
+                f.write(res.content)
+            return filename
+        except Exception as e:
+            print(f"⚠️ Image Error: {e}")
+            time.sleep(5)
+    
+    # Emergency Fallback
+    PIL.Image.new('RGB', (720, 1280), (20, 20, 20)).save(filename)
+    return filename
+
+# --- 3. VIDEO GENERATOR (Fixed API Name Error) ---
+def animate_wan_with_retry(horror_prompt, max_retries=2):
+    print(f"🎬 Connecting to Wan-AI/Wan2.1...")
+    for attempt in range(max_retries):
+        try:
+            client = Client("Wan-AI/Wan2.1", token=HF_TOKEN)
+            # We use positional arguments instead of api_name='/predict' 
+            # as some versions of this space have unnamed endpoints
+            result = client.predict(
+                f"found footage horror, grainy, {horror_prompt}", # prompt
+                "bright, clean, 4k", # negative_prompt
+                5.0, # guide_scale
+                30,  # num_inference_steps
+            )
+            video_filename = "wan_climax.mp4"
+            shutil.copy(result, video_filename)
+            return video_filename
+        except Exception as e:
+            print(f"⚠️ Video Attempt {attempt+1} failed: {e}")
+            time.sleep(30)
     return None
 
-# --- 3. ANIMATION ---
-def animate_horror(image_path, index):
-    print(f"🎬 Animating segment {index}...")
-    try:
-        client = Client("linoyts/FramePack-F1")
-        result = client.predict(handle_file(image_path), "eerie movement", fn_index=0)
-        out_vid = f"vid_{index}.mp4"
-        shutil.copy(result, out_vid)
-        return os.path.abspath(out_vid)
-    except: return None
-
-# --- 4. MAIN PIPELINE ---
-async def main():
-    # A. Get Content
-    data = {
-        "script": "The basement was never empty [gasp]. Mickey's eyes followed me. They weren't plastic. They were wet [laugh].",
-        "prompts": ["Horror Mickey Mouse dark basement", "Scary Pikachu glowing eyes"]
-    }
-
-    # B. Generate Voice
-    audio_path = generate_voice(data['script'])
+# --- 4. EDITOR ---
+def create_story_video(img1, img2, video_clip, audio_path, output_filename):
+    audio = AudioFileClip(audio_path)
+    d = audio.duration
     
-    # SAFETY GUARD: If audio_path is None, stop before MoviePy crashes
-    if not audio_path:
-        print("🛑 Critical Error: Voice generation failed. Check Hugging Face Space status.")
-        return 
+    c1 = ImageClip(img1).set_duration(d*0.3 + 1).resize(lambda t: 1+0.04*t).set_position('center')
+    c2 = ImageClip(img2).set_duration(d*0.3 + 1).resize(lambda t: 1+0.06*t).set_position('center').set_start(d*0.3).crossfadein(1)
+    
+    if video_clip and os.path.exists(video_clip):
+        # Clip the climax video to fit the remaining time
+        c3 = VideoFileClip(video_clip).resize(height=1280).set_start(d*0.6).crossfadein(0.5)
+        if c3.duration > (d * 0.4):
+            c3 = c3.subclip(0, d * 0.4 + 1)
+        if c3.w > 720: 
+            c3 = c3.crop(x1=c3.w/2 - 360, width=720)
+    else:
+        c3 = ImageClip(img2).set_duration(d*0.4 + 1).resize(lambda t: 1+0.15*t).set_start(d*0.6).crossfadein(0.5)
 
-    audio_clip = AudioFileClip(audio_path)
-    clip_duration = audio_clip.duration / len(data['prompts'])
+    final = CompositeVideoClip([c1, c2, c3], size=(720, 1280)).set_duration(d).set_audio(audio)
+    final.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
+    return output_filename
 
-    # C. Generate & Animate Clips
-    final_clips = []
-    for i, p in enumerate(data['prompts']):
-        img = generate_horror_image(p, f"img_{i}.jpg")
-        if not img: continue
-        
-        vid = animate_horror(img, i)
-        if vid and os.path.exists(vid):
-            c = VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280)
-        else:
-            c = (ImageClip(img).set_duration(clip_duration)
-                 .resize(lambda t: 1 + 0.04*t).set_fps(24))
-        final_clips.append(c)
+async def make_audio(text, filename):
+    await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
 
-    # D. Final Merge
-    if final_clips:
-        video = concatenate_videoclips(final_clips, method="compose")
-        video = video.set_audio(audio_clip)
-        video.write_videofile("output_short.mp4", fps=24, codec="libx264", audio_codec="aac")
-        print("✅ Finished: output_short.mp4")
+# --- 5. UPLOADER (Fixed Split Error) ---
+def upload_to_youtube(video_path, title, description, tags):
+    # Fix for the 'list' has no attribute 'split' error
+    if isinstance(tags, list):
+        tag_list = tags
+        tag_str = " ".join(tags)
+    else:
+        tag_list = tags.split(',')
+        tag_str = tags
+
+    creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
+    service = build("youtube", "v3", credentials=creds)
+    body = {
+        "snippet": {
+            "title": title[:100], 
+            "description": f"{description}\n\n{tag_str}", 
+            "tags": tag_list, 
+            "categoryId": "1"
+        }, 
+        "status": {"privacyStatus": "public"}
+    }
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    res = service.videos().insert(part="snippet,status", body=body, media_body=media).execute()
+    return res['id']
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        data = get_concept()
+        print(f"📝 Concept: {data['title']}")
+        
+        generate_image(data['prompt_1_normal'], "n.jpg")
+        generate_image(data['prompt_2_uncanny'], "u.jpg")
+        asyncio.run(make_audio(data['script'], "v.mp3"))
+        
+        video_clip = animate_wan_with_retry(data['prompt_3_horror'])
+        
+        final_path = create_story_video("n.jpg", "u.jpg", video_clip, "v.mp3", "final.mp4")
+        
+        vid_id = upload_to_youtube(final_path, data['title'], data['description'], data['hashtags'])
+        print(f"🚀 Success! https://youtube.com/shorts/{vid_id}")
+    except Exception as e:
+        print(f"❌ Critical Failure: {e}")
