@@ -12,3 +12,4 @@ pillow>=10.4.0           # Modern image handling (requires the ANTIALIAS fix in 
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+edge-tts
