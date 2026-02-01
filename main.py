@@ -1,90 +1,103 @@
-import os, random, requests, asyncio, time, urllib.parse, shutil
+import os, random, requests, asyncio, time, urllib.parse, shutil, io
 import PIL.Image
+import numpy as np
 from moviepy.editor import *
 from google import genai
 from google.genai import types
 from gradio_client import Client, handle_file
 
-# --- MOVIEPY FIX ---
+# --- CRITICAL FIXES ---
+# 1. Restore the removed ANTIALIAS attribute for MoviePy
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
-# --- KEYS ---
+# --- CONFIG ---
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-YT_REFRESH = os.environ.get("YOUTUBE_REFRESH_TOKEN")
-
 gemini = genai.Client(api_key=GEMINI_KEY)
 
-# --- CHATTERBOX VOICE GENERATOR ---
-def generate_chatterbox_voice(text, filename="voice.wav"):
-    print(f"🎙️ Chatterbox is speaking: {text[:30]}...")
+# --- 1. CHATTERBOX (Emotional Voice) ---
+def generate_voice(text, filename="voice.wav"):
+    print(f"🎙️ Chatterbox is narrating...")
     try:
-        # Using the official ResembleAI Space (or a reliable mirror)
-        client = Client("ResembleAI/Chatterbox") 
-        
-        # Chatterbox Parameters: Text, Language, Speed, Exaggeration
+        # Using the Multilingual space (most stable in 2026)
+        client = Client("ResembleAI/Chatterbox-Multilingual-TTS")
+        # Use fn_index=0 to bypass named endpoint errors
         result = client.predict(
-            text,           # Input text
-            "English",      # Language
-            0.5,            # Speed (lower is slower)
-            0.7,            # Exaggeration (higher is more emotional)
-            api_name="/predict"
+            text,           # text
+            "English",      # language
+            0.5,            # speed
+            0.8,            # exaggeration (higher for horror)
+            fn_index=0      
         )
         shutil.copy(result, filename)
-        return filename
+        return str(os.path.abspath(filename))
     except Exception as e:
-        print(f"❌ Chatterbox Error: {e}")
+        print(f"❌ Voice Error: {e}")
         return None
 
-# --- IMAGE GENERATOR ---
-def generate_image(prompt, filename):
-    seed = random.randint(0, 999999)
+# --- 2. IMAGE GEN (Pollinations Flux) ---
+def generate_horror_image(prompt, filename):
+    print(f"🎨 Creating: {filename}")
     clean_p = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&seed={seed}&nologo=true"
-    res = requests.get(url)
-    with open(filename, "wb") as f: f.write(res.content)
-    return filename
+    seed = random.randint(0, 999999)
+    # Using 'flux' model for high-end horror detail
+    url = f"https://image.pollinations.ai/prompt/{clean_p}?width=720&height=1280&seed={seed}&model=flux&nologo=true"
+    res = requests.get(url, timeout=30)
+    if res.status_code == 200:
+        with open(filename, "wb") as f: f.write(res.content)
+        return str(os.path.abspath(filename))
+    return None
 
-# --- ANIMATOR ---
-def animate_frame(image_path, index):
+# --- 3. ANIMATION (FramePack-F1) ---
+def animate_horror(image_path, index):
+    print(f"🎬 Animating segment {index}...")
     try:
         client = Client("linoyts/FramePack-F1")
-        result = client.predict(handle_file(image_path), "horror movement, subtle", api_name="/predict")
-        out = f"vid_{index}.mp4"
-        shutil.copy(result, out)
-        return out
-    except: return None
+        # FramePack usually takes image + motion prompt
+        result = client.predict(
+            handle_file(image_path), 
+            "slow eerie movement, breathing", 
+            fn_index=0
+        )
+        out_vid = f"vid_{index}.mp4"
+        shutil.copy(result, out_vid)
+        return str(os.path.abspath(out_vid))
+    except Exception as e:
+        print(f"⚠️ Animation failed: {e}")
+        return None
 
-# --- MAIN WORKFLOW ---
-async def run_bot():
-    # 1. BRAIN: Pick 4 characters & write script
-    # (Simplified for brevity, use your full list prompt here)
+# --- 4. MAIN PIPELINE ---
+async def main():
+    # A. Get Content from Gemini
+    # (Insert your full character list prompt here)
     data = {
-        "chars": ["Mickey Mouse", "Pikachu", "SpongeBob", "Link"],
-        "script": "The archives hold secrets [sigh]. Mickey isn't smiling anymore [laugh]. Pikachu's spark is... gone.",
-        "prompts": ["horror mickey", "horror pikachu", "horror spongebob", "horror link"]
+        "script": "The basement was never empty [gasp]. Mickey's eyes followed me. They weren't plastic. They were wet [laugh].",
+        "prompts": ["Horror Mickey Mouse in dark basement, found footage", "Scary Pikachu with glowing eyes"]
     }
 
-    # 2. VOICE: Generate first to get duration
-    audio_file = generate_chatterbox_voice(data['script'])
-    audio_clip = AudioFileClip(audio_file)
-    
-    # 3. VISUALS: Generate and Animate 4 segments
-    clips = []
-    for i in range(4):
-        img = generate_image(data['prompts'][i], f"img_{i}.jpg")
-        vid = animate_frame(img, i)
-        if vid: 
-            clips.append(VideoFileClip(vid))
-        else:
-            clips.append(ImageClip(img).set_duration(audio_clip.duration/4).resize(lambda t: 1+0.02*t))
+    # B. Generate Voice
+    audio_path = generate_voice(data['script'])
+    audio_clip = AudioFileClip(audio_path)
+    clip_duration = audio_clip.duration / len(data['prompts'])
 
-    # 4. MERGE
-    final_video = concatenate_videoclips(clips, method="compose")
-    final_video = final_video.set_audio(audio_clip).set_duration(audio_clip.duration)
-    final_video.write_videofile("output.mp4", fps=24, codec="libx264")
-    
-    print("🚀 Video Ready for YouTube!")
+    # C. Generate & Animate Clips
+    final_clips = []
+    for i, p in enumerate(data['prompts']):
+        img = generate_horror_image(p, f"img_{i}.jpg")
+        vid = animate_horror(img, i)
+        
+        if vid and os.path.exists(vid):
+            c = VideoFileClip(vid).subclip(0, clip_duration).resize(height=1280)
+        else:
+            # Fallback to static zoom if animation fails
+            c = (ImageClip(img).set_duration(clip_duration)
+                 .resize(lambda t: 1 + 0.04*t).set_fps(24))
+        final_clips.append(c)
+
+    # D. Final Merge
+    video = concatenate_videoclips(final_clips, method="compose")
+    video = video.set_audio(audio_clip)
+    video.write_videofile("output_short.mp4", fps=24, codec="libx264", audio_codec="aac")
 
 if __name__ == "__main__":
-    asyncio.run(run_bot())
+    asyncio.run(main())
