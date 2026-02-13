@@ -103,6 +103,7 @@ class SubmagicClient:
         upload_url = f"{self.BASE_URL}/projects"
         headers = {"x-api-key": self.api_key} # Content-Type is set by requests for multipart
         
+        try:
             # 3: Verify Submagic Upload Payload (Debug)
             # Some APIs need the file tuple to be (filename, file_object, content_type)
             with open(video_path, 'rb') as f:
