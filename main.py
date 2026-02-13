@@ -44,7 +44,19 @@ def get_concept():
     style = random.choice(HORROR_STYLES)
     print(f"👻 Selected Horror Style: {style}")
     
-    prompt = f"Generate a '{style}' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (as a single string)."
+    prompt = (
+        f"Generate a '{style}' YouTube Short script (approx 30-60s). "
+        "Return a JSON object with:\n"
+        "- 'script': The narrator's voiceover text.\n"
+        "- 'prompt_1_normal': A highly detailed visual description of the opening scene (setting the mood).\n"
+        "- 'prompt_2_uncanny': A visual description of the middle scene where something is wrong.\n"
+        "- 'prompt_3_horror': A visual description of the terrifying climax/reveal.\n"
+        "- 'title': A viral clickbait title.\n"
+        "- 'description': Short video description.\n"
+        "- 'hashtags': Relevant hashtags as a single string.\n"
+        "IMPORTANT: The image prompts MUST strictly match the events described in the 'script'. "
+        "Describe the lighting, environment, and entities visible at that specific moment."
+    )
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
