@@ -158,7 +158,7 @@ def animate_wan_i2v(image_path, prompt, max_retries=3):
                 quality=6,
                 scheduler="UniPCMultistep",
                 flow_shift=3,
-                frame_multiplier="16",
+                frame_multiplier=16,
                 video_component=True,
                 api_name="/generate_video"
             )
