@@ -92,6 +92,11 @@ def animate_wan_with_retry(horror_prompt, max_retries=2):
                 result = client.predict(api_name="/status_refresh")
                 
                 video_data = result[0]
+                cost_time = result[1]
+                estimated_wait = result[2]
+                
+                print(f"      ...Status: Cost={cost_time}s, Est. Wait={estimated_wait}s")
+
                 # video_data is likely {'video': '/path/to/video', 'subtitles': ...} or None or similar
                 # Check if we have a valid video path in the dict
                 if video_data and 'video' in video_data and video_data['video']:
@@ -104,7 +109,7 @@ def animate_wan_with_retry(horror_prompt, max_retries=2):
                 # Check for progress/waiting
                 # result[2] is estimated waiting time, result[1] is cost time? 
                 # Use a small sleep to avoid hammering the API
-                time.sleep(2)
+                time.sleep(5)
                 
         except Exception as e:
             print(f"⚠️ Video Attempt {attempt+1} failed: {e}")
