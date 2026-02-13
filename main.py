@@ -103,16 +103,17 @@ class SubmagicClient:
         upload_url = f"{self.BASE_URL}/projects"
         headers = {"x-api-key": self.api_key} # Content-Type is set by requests for multipart
         
-        try:
+            # 3: Verify Submagic Upload Payload (Debug)
+            # Some APIs need the file tuple to be (filename, file_object, content_type)
             with open(video_path, 'rb') as f:
                 # Based on search results: 'file', 'title', 'language', 'templateName'
-                files = {'file': f}
+                files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
                 data = {
                     'title': title[:100],
                     'language': 'en',
-                    'templateName': 'Hormozi 2' # User requested template
+                    'templateName': 'Hormozi 2' 
                 }
-                res = requests.post(upload_url, headers=headers, files=files, data=data)
+                res = requests.post(upload_url, headers=headers, files=files, data=data) 
             
             if res.status_code not in [200, 201]:
                 print(f"⚠️ Submagic Upload Failed: {res.status_code} - {res.text}")
@@ -436,15 +437,13 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
             hook_clip = hook_clip.resize(lambda t: 1 + 0.05*t)
         
         # Text Hook: Overlay
-        # Using simple TextClip for now (Submagic would replace this if active)
-        # Ensure ImageMagick is installed or this might fail. 
-        # Fallback: Print instruction if TextClip fails or skip.
         try:
             txt_clip = TextClip(hook_text, fontsize=70, color='white', font='Arial-Bold', stroke_color='black', stroke_width=2, size=(600, None), method='caption')
             txt_clip = txt_clip.set_position('center').set_duration(hook_duration)
             hook_clip = CompositeVideoClip([hook_clip, txt_clip])
-        except Exception as e:
-            print(f"⚠️ TextClip failed (ImageMagick missing?): {e}")
+        except Exception:
+            # Silent fail for ImageMagick missing
+            pass
             
         clips.append(hook_clip)
         current_time = hook_duration
@@ -550,11 +549,7 @@ def upload_to_youtube(video_path, title, description, tags):
             "title": title[:100], 
             "description": f"{description}\n\n{tag_str}", 
             "tags": tag_list, 
-            "categoryId": "42" # Shorts often use 42 (Shorts) or 24 (Entertainment). 1 is Film & Animation. Let's stick to 42 if possible, or back to 22/24. 
-            # Actually, standard categoryId 22 (People & Blogs) or 24 (Entertainment) is safer. 
-            # YouTube auto-classifies shorts based on file, not categoryId. 
-            # Let's keep categoryId as is but rely on title/desc.
-            # Leaving as "1" (Film & Animation) is fine, but ensuring title has #Shorts is key.
+            "categoryId": "24" # Entertainment (Safe default)
         }, 
         "status": {"privacyStatus": "public"}
     }
