@@ -32,9 +32,19 @@ YT_REFRESH_TOKEN = get_secret("YOUTUBE_REFRESH_TOKEN")
 HF_TOKEN = get_secret("HF_TOKEN") 
 
 # --- 1. BRAIN ---
+HORROR_STYLES = [
+    "Found Footage", "Analog Horror", "Liminal Space", "Uncanny Valley",
+    "Body Horror", "Cosmic Horror", "Folk Horror", "Slasher", 
+    "Paranormal/Ghost", "Psychological Thriller", "Cryptid Encounter",
+    "Cursed Internet Mystery", "VHS Glitch Horror"
+]
+
 def get_concept():
     client = Groq(api_key=GROQ_KEY)
-    prompt = "Generate a 'Cursed/Found Footage' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (as a single string)."
+    style = random.choice(HORROR_STYLES)
+    print(f"👻 Selected Horror Style: {style}")
+    
+    prompt = f"Generate a '{style}' YouTube Short script. Return JSON with: 'script', 'prompt_1_normal', 'prompt_2_uncanny', 'prompt_3_horror', 'title', 'description', 'hashtags' (as a single string)."
     completion = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama-3.3-70b-versatile",
