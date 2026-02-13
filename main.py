@@ -70,10 +70,12 @@ class ViralBrain:
         )
 
         completion = self.client.chat.completions.create(
-            messages=[{"role": "user", "content": "Generate a Cursed Archive viral short concept."}],
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": "Generate a Cursed Archive viral short concept."}
+            ],
             model="llama-3.3-70b-versatile",
-            response_format={"type": "json_object"},
-            system=sys_prompt # Use system prompt for robust instruction
+            response_format={"type": "json_object"}
         )
         return json.loads(completion.choices[0].message.content)
 
