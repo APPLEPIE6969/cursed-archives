@@ -97,40 +97,95 @@ class SubmagicClient:
         if not self.api_key:
             return video_path
 
-        print(f"✨ Submagic: Processing {video_path}...")
+        print(f"✨ Submagic: Uploading {video_path}...")
         
-        # 1. Upload Video (We need a public URL or direct upload? The prompt example shows 'videoUrl')
-        # If the API allows file upload, we used that. If it requires a URL, we might be stuck unless we upload to S3/Drive first.
-        # The prompt says: "Upload operations (project creation, file uploads): 500 requests/hour".
-        # Let's assume we can upload. But the example shows "videoUrl": "https://drive..."
-        # If we can't upload directly, we might skip this or use a temporary host?
-        # WAIT: The prompt says "output: ... On-screen Text".
-        # Maybe we should just stick to moviepy for text if Submagic is too complex for local files without a server.
-        # BUT the user explicitly asked for "SUBMAGIC_API_KEY: for the automatic captions".
-        # Let's try to assume we can upload. If not, we will need a workaround.
-        # Inspecting standard Submagic API patterns (not provided, but typical): usually involves getting a presigned URL.
+        # 1. Upload Video
+        upload_url = f"{self.BASE_URL}/projects"
+        headers = {"x-api-key": self.api_key} # Content-Type is set by requests for multipart
         
-        # For this implementation, since I cannot guarantee a public URL for the local file, 
-        # I will implement a placeholder that LOGS the intention, unless I can find an upload endpoint.
-        # The prompt says "Upload operations... file uploads". So there MUST be a way.
-        
-        # Let's try a standard flow: Create Project -> Get Upload URL -> Upload -> Export.
-        # Since I don't have the docs for file upload, I will implement a "soft" version that
-        # effectively prepares the request but might fail if it strictly needs a URL.
-        
-        # HOWEVER, sticking to the user request:
-        # "Script + Hooks is very important... commit to ... test-new".
-        # I will verify if I can just use moviepy for the "Text Hook" and use Submagic if I can.
-        
-        # Let's write the client to be ready.
-        headers = {
-            "x-api-key": self.api_key,
-            "Content-Type": "application/json"
-        }
-        
-        # Hypothetical upload flow based on "file uploads" rate limit hint
-        # If this fails, we return original video.
-        return video_path 
+        try:
+            with open(video_path, 'rb') as f:
+                # Based on search results: 'file', 'title', 'language', 'templateName'
+                files = {'file': f}
+                data = {
+                    'title': title[:100],
+                    'language': 'en',
+                    'templateName': 'Hormozi 2' # User requested template
+                }
+                res = requests.post(upload_url, headers=headers, files=files, data=data)
+            
+            if res.status_code not in [200, 201]:
+                print(f"⚠️ Submagic Upload Failed: {res.status_code} - {res.text}")
+                return video_path
+                
+            project_data = res.json().get('data', {}) # Assuming 'data' envelope or direct
+            # If API returns direct object
+            if 'id' in res.json(): project_data = res.json()
+            
+            project_id = project_data.get('id')
+            if not project_id:
+                print(f"⚠️ Submagic: No Project ID returned. {res.text}")
+                return video_path
+                
+            print(f"   Submagic Project ID: {project_id}. Waiting for processing...")
+            
+            # 2. Poll for Completion
+            # Rate limit check: "Standard operations... 500/hour". 
+            # We poll every 10s.
+            for attempt in range(60): # 10 minutes timeout
+                time.sleep(10)
+                status_url = f"{self.BASE_URL}/projects/{project_id}"
+                status_res = requests.get(status_url, headers=headers)
+                
+                if status_res.status_code == 200:
+                    status_data = status_res.json()
+                    # Flatten if inside 'data'
+                    if 'data' in status_data: status_data = status_data['data']
+                    
+                    status = status_data.get('status')
+                    print(f"      ...Status: {status}")
+                    
+                    if status == 'completed':
+                        # Look for download URL. 
+                        # Sometimes it's 'videoUrl', 'downloadUrl', or we need to hit /export.
+                        # User mentioned "Export operations". Let's try export if no URL found.
+                        download_url = status_data.get('videoUrl') or status_data.get('downloadUrl')
+                        
+                        if not download_url:
+                            # Try explicit export (blind attempt based on user prompt hint)
+                            print("      ...Triggering Export...")
+                            export_url = f"{self.BASE_URL}/projects/{project_id}/export"
+                            # Export might be blocking or return a url
+                            export_res = requests.post(export_url, headers=headers)
+                            if export_res.status_code == 200:
+                                export_data = export_res.json()
+                                if 'data' in export_data: export_data = export_data['data']
+                                download_url = export_data.get('url')
+                        
+                        if download_url:
+                            print(f"   ✅ Submagic Success! Downloading captions...")
+                            # Download
+                            final_res = requests.get(download_url)
+                            captioned_path = video_path.replace(".mp4", "_submagic.mp4")
+                            with open(captioned_path, "wb") as f_out:
+                                f_out.write(final_res.content)
+                            return captioned_path
+                        else:
+                            print("⚠️ Submagic Completed but no URL found.")
+                            return video_path
+                            
+                    elif status == 'failed':
+                        print("❌ Submagic Processing Failed.")
+                        return video_path
+                else:
+                    print(f"   Polling Error: {status_res.status_code}")
+                    
+            print("⚠️ Submagic Timeout.")
+            return video_path
+
+        except Exception as e:
+            print(f"⚠️ Submagic Client Error: {e}")
+            return video_path
 
 # --- 3. IMAGE GENERATOR (Freepik Mystic) ---
 def generate_image_freepik(prompt, filename):
