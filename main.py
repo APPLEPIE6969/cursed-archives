@@ -409,28 +409,39 @@ def animate_wan_i2v(image_path, prompt, max_retries=3):
     return None
 
 # --- 4. EDITOR (Viral Engine) ---
-def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text, output_filename):
-    print("✂️ Editing Viral Short...")
-    audio = AudioFileClip(audio_path)
-    total_duration = audio.duration
+def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_audio_path, hook_text, output_filename):
+    print("✂️ Editing Viral Short (Smart Sync)...")
+    
+    # Load Audios
+    hook_audio = AudioFileClip(hook_audio_path)
+    body_audio = AudioFileClip(body_audio_path)
+    total_audio_duration = hook_audio.duration + body_audio.duration
     
     clips = []
     
-    # 1. THE HOOK (0-3s)
+    # --- 1. THE HOOK (Synced to Audio) ---
+    hook_duration = hook_audio.duration
+    
     # Visual Hook: Wan 2.2 generated video OR fallback image
     if os.path.exists(hook_video_path):
         # Determine if video or image
         if hook_video_path.lower().endswith(('.mp4', '.mov', '.avi')):
-            hook_clip = VideoFileClip(hook_video_path).resize(height=1280)
+            video_clip = VideoFileClip(hook_video_path).resize(height=1280)
             # Center crop to 720x1280
-            if hook_clip.w > 720:
-                 hook_clip = hook_clip.crop(x1=hook_clip.w/2 - 360, width=720)
-            # Duration: First 3 seconds or audio length if shorter?
-            hook_duration = min(3, total_duration) 
-            hook_clip = hook_clip.subclip(0, hook_duration)
+            if video_clip.w > 720:
+                 video_clip = video_clip.crop(x1=video_clip.w/2 - 360, width=720)
+            
+            # Logic: If Audio > Video, freeze the last frame. If Audio < Video, cut video.
+            if hook_duration > video_clip.duration:
+                # Freeze frame extension
+                freeze_duration = hook_duration - video_clip.duration
+                frozen_frame = video_clip.to_ImageClip(t=video_clip.duration - 0.1).set_duration(freeze_duration)
+                hook_clip = concatenate_videoclips([video_clip, frozen_frame])
+            else:
+                hook_clip = video_clip.subclip(0, hook_duration)
+                
         else:
             # Fallback to ImageClip if it's a jpg/png
-            hook_duration = min(3, total_duration)
             hook_clip = ImageClip(hook_video_path).set_duration(hook_duration).resize(height=1280)
             if hook_clip.w > 720:
                  hook_clip = hook_clip.crop(x1=hook_clip.w/2 - 360, width=720)
@@ -443,26 +454,23 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
             txt_clip = txt_clip.set_position('center').set_duration(hook_duration)
             hook_clip = CompositeVideoClip([hook_clip, txt_clip])
         except Exception:
-            # Silent fail for ImageMagick missing
-            pass
+            pass # Silent fail
             
+        # Bind audio
+        hook_clip = hook_clip.set_audio(hook_audio)
         clips.append(hook_clip)
-        current_time = hook_duration
     else:
-        current_time = 0
+        # Emergency fallback if no hook media?
+        # Just use black screen? Or skip.
+        pass
 
-    # 2. THE BODY (Fast Pacing)
-    # "Pattern interrupt every 5-15 seconds" -> We simply switch images fast.
-    # "No static frames longer than 3 seconds"
+    # --- 2. THE BODY (Synced to Body Audio) ---
+    body_duration = body_audio.duration
     
-    remaining_time = total_duration - current_time
-    if remaining_time > 0 and body_image_paths:
-        # Calculate duration per image
+    if body_duration > 0 and body_image_paths:
+        # Calculate duration per image based on BODY audio
         num_images = len(body_image_paths)
-        duration_per_image = remaining_time / num_images
-        
-        # Cap duration to max 3s to satisfy "No static frames > 3s"
-        # If duration_per_image > 3, we might need to loop/duplicate or just accept (Kenneth Burns effect helps)
+        duration_per_image = body_duration / num_images
         
         for i, img_path in enumerate(body_image_paths):
             if not os.path.exists(img_path): continue
@@ -473,24 +481,36 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
             if img_clip.w > 720:
                 img_clip = img_clip.crop(x1=img_clip.w/2 - 360, width=720)
             
-            # Apply "Ken Burns" (Zoom/Pan) to avoid static frame
-            # Randomize effect: Zoom In, Zoom Out, Pan Left, Pan Right
+            # Apply "Ken Burns" (Zoom/Pan)
             effect = random.choice(['zoom_in', 'zoom_out', 'pan'])
-            
             if effect == 'zoom_in':
                 img_clip = img_clip.resize(lambda t: 1 + 0.05*t)
             elif effect == 'zoom_out':
-                img_clip = img_clip.resize(lambda t: 1.2 - 0.05*t) # Start zoomed in
+                img_clip = img_clip.resize(lambda t: 1.2 - 0.05*t) 
             
             clips.append(img_clip)
+        
+        # Create body composite (sequence of images)
+        # Verify timestamps... concatenate_videoclips handles basic sequencing
+        # But we need to set the collective audio for the body part?
+        # No, easier to just concat the visual clips first, then set audio? 
+        # Actually, let's keep them as a list and concat all at the end.
+        pass
     
-    # Concatenate
+    # Concatenate all visual clips (Hook + Body Images)
     final_video = concatenate_videoclips(clips, method="compose")
-    final_video = final_video.set_audio(audio)
+    
+    # Composite Audio (Hook Audio + Body Audio)
+    # Note: concatenate_videoclips might preserve audio if clips have it. 
+    # Hook has audio. Body images don't.
+    # We need to explicitly set the Body Audio to start after Hook.
+    # Safest: Create a composite audio clip.
+    full_audio = concatenate_audioclips([hook_audio, body_audio])
+    final_video = final_video.set_audio(full_audio)
     
     # Ensure exact duration match
     # STRICT SHORTS LIMIT: 59 seconds max to be safe.
-    final_duration = min(total_duration, 59.0)
+    final_duration = min(final_video.duration, 59.0)
     final_video = final_video.set_duration(final_duration)
     
     final_video.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
@@ -580,17 +600,26 @@ if __name__ == "__main__":
             generate_image_freepik(p, fname)
             body_images.append(fname)
             
-        # C. Audio (Hook + Body)
-        # Combine text
-        full_script = f"{data.get('hook_audio', '')} {data.get('script_body', '')}"
-        asyncio.run(make_audio(full_script, "full_audio.mp3"))
+        # C. Audio (Split for Smart Sync)
+        print("   🎙️ Generating Split Audio...")
+        hook_audio_text = data.get('hook_audio', '')
+        body_audio_text = data.get('script_body', '')
+        
+        async def generate_all_audio():
+            await asyncio.gather(
+                make_audio(hook_audio_text, "hook.mp3"),
+                make_audio(body_audio_text, "body.mp3")
+            )
+            
+        asyncio.run(generate_all_audio())
         
         # 3. EDIT: Assemble Viral Short
         final_file = "viral_short.mp4"
         create_viral_short(
             hook_video_path=hook_video, 
             body_image_paths=body_images, 
-            audio_path="full_audio.mp3", 
+            hook_audio_path="hook.mp3",
+            body_audio_path="body.mp3",
             hook_text=data.get('hook_text', 'WAIT FOR IT'), 
             output_filename=final_file
         )
