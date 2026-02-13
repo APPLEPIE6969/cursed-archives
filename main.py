@@ -326,6 +326,62 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
     final_video.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
     return output_filename
 
+def generate_audio_kokoro(text, filename):
+    print("   🎙️ Generating audio (Kokoro TTS)...")
+    try:
+        client = Client("https://yakhyo-kokoro-onnx.hf.space/")
+        result = client.predict(
+            text=text,
+            model_path="kokoro-quant.onnx",
+            style_vector="am_adam.pt", # Male voice
+            output_file_format="mp3",
+            speed=1,
+            api_name="/local_tts"
+        )
+        shutil.copy(result, filename)
+        return filename
+    except Exception as e:
+        print(f"   ⚠️ Kokoro Init Error: {e}")
+        raise e
+
+async def make_audio(text, filename):
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, generate_audio_kokoro, text, filename)
+        print("   ✅ Kokoro TTS success.")
+    except Exception as e:
+        print(f"   ⚠️ Kokoro TTS failed: {e}. Switching to EdgeTTS fallback...")
+        try:
+            await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
+            print("   ✅ EdgeTTS success.")
+        except Exception as e2:
+             print(f"   ❌ All TTS failed: {e2}")
+             raise e2
+
+# --- 5. UPLOADER ---
+def upload_to_youtube(video_path, title, description, tags):
+    if isinstance(tags, list):
+        tag_list = tags
+        tag_str = " ".join(tags)
+    else:
+        tag_list = tags.split(',')
+        tag_str = tags
+
+    creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
+    service = build("youtube", "v3", credentials=creds)
+    body = {
+        "snippet": {
+            "title": title[:100], 
+            "description": f"{description}\n\n{tag_str}", 
+            "tags": tag_list, 
+            "categoryId": "1"
+        }, 
+        "status": {"privacyStatus": "public"}
+    }
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    res = service.videos().insert(part="snippet,status", body=body, media_body=media).execute()
+    return res['id']
+
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
     try:
