@@ -112,6 +112,7 @@ def animate_wan_with_retry(horror_prompt, max_retries=2):
     return None
 
 # --- 4. EDITOR ---
+# --- 4. EDITOR ---
 def create_story_video(img1, img2, video_clip, audio_path, output_filename):
     audio = AudioFileClip(audio_path)
     d = audio.duration
@@ -133,8 +134,35 @@ def create_story_video(img1, img2, video_clip, audio_path, output_filename):
     final.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
     return output_filename
 
+def generate_audio_kokoro(text, filename):
+    print("   🎙️ Generating audio (Kokoro TTS)...")
+    client = Client("https://yakhyo-kokoro-onnx.hf.space/")
+    result = client.predict(
+        text=text,
+        model_path="kokoro-quant.onnx",
+        style_vector="am_adam.pt", # Male voice
+        output_file_format="mp3",
+        speed=1,
+        api_name="/local_tts"
+    )
+    # result is the filepath to the generated audio
+    shutil.copy(result, filename)
+    return filename
+
 async def make_audio(text, filename):
-    await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
+    try:
+        # Run synchronous Gradio call in a separate thread to not block the event loop
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, generate_audio_kokoro, text, filename)
+        print("   ✅ Kokoro TTS success.")
+    except Exception as e:
+        print(f"   ⚠️ Kokoro TTS failed: {e}. Switching to EdgeTTS fallback...")
+        try:
+            await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
+            print("   ✅ EdgeTTS success.")
+        except Exception as e2:
+             print(f"   ❌ All TTS failed: {e2}")
+             raise e2
 
 # --- 5. UPLOADER (Fixed Split Error) ---
 def upload_to_youtube(video_path, title, description, tags):
