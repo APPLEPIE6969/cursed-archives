@@ -384,7 +384,9 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
     final_video = final_video.set_audio(audio)
     
     # Ensure exact duration match
-    final_video = final_video.set_duration(total_duration)
+    # STRICT SHORTS LIMIT: 59 seconds max to be safe.
+    final_duration = min(total_duration, 59.0)
+    final_video = final_video.set_duration(final_duration)
     
     final_video.write_videofile(output_filename, fps=24, codec='libx264', audio_codec='aac', temp_audiofile='temp-audio.m4a', remove_temp=True)
     return output_filename
@@ -428,7 +430,13 @@ def upload_to_youtube(video_path, title, description, tags):
         tag_str = " ".join(tags)
     else:
         tag_list = tags.split(',')
-        tag_str = tags
+        tag_str = tags # Assuming it is already a string
+
+    # FORCE SHORTS METADATA
+    if "#Shorts" not in title:
+        title = f"{title} #Shorts"
+    if "#Shorts" not in description:
+        description = f"{description}\n\n#Shorts"
 
     creds = Credentials(None, refresh_token=YT_REFRESH_TOKEN, token_uri="https://oauth2.googleapis.com/token", client_id=YT_CLIENT_ID, client_secret=YT_CLIENT_SECRET)
     service = build("youtube", "v3", credentials=creds)
@@ -437,7 +445,11 @@ def upload_to_youtube(video_path, title, description, tags):
             "title": title[:100], 
             "description": f"{description}\n\n{tag_str}", 
             "tags": tag_list, 
-            "categoryId": "1"
+            "categoryId": "42" # Shorts often use 42 (Shorts) or 24 (Entertainment). 1 is Film & Animation. Let's stick to 42 if possible, or back to 22/24. 
+            # Actually, standard categoryId 22 (People & Blogs) or 24 (Entertainment) is safer. 
+            # YouTube auto-classifies shorts based on file, not categoryId. 
+            # Let's keep categoryId as is but rely on title/desc.
+            # Leaving as "1" (Film & Animation) is fine, but ensuring title has #Shorts is key.
         }, 
         "status": {"privacyStatus": "public"}
     }
