@@ -71,20 +71,44 @@ def animate_wan_with_retry(horror_prompt, max_retries=2):
     for attempt in range(max_retries):
         try:
             client = Client("Wan-AI/Wan2.1", token=HF_TOKEN)
-            # We use positional arguments instead of api_name='/predict' 
-            # as some versions of this space have unnamed endpoints
-            result = client.predict(
-                f"found footage horror, grainy, {horror_prompt}", # prompt
-                "bright, clean, 4k", # negative_prompt
-                5.0, # guide_scale
-                30,  # num_inference_steps
+            
+            # Switch to T2V tab to ensure correct context
+            client.predict(api_name="/switch_t2v_tab")
+            
+            # Trigger generation
+            print(f"   PLEASE WAIT... Requesting generation (Attempt {attempt+1})...")
+            client.predict(
+                prompt=f"found footage horror, grainy, {horror_prompt}",
+                size="720*1280",
+                watermark_wan=False,
+                seed=-1,
+                api_name="/t2v_generation_async"
             )
-            video_filename = "wan_climax.mp4"
-            shutil.copy(result, video_filename)
-            return video_filename
+            
+            # Poll for status
+            print("   Polling for result...")
+            while True:
+                # Returns: (video_dict, cost_time, estimated_waiting_time, slider_val)
+                result = client.predict(api_name="/status_refresh")
+                
+                video_data = result[0]
+                # video_data is likely {'video': '/path/to/video', 'subtitles': ...} or None or similar
+                # Check if we have a valid video path in the dict
+                if video_data and 'video' in video_data and video_data['video']:
+                    temp_path = video_data['video']
+                    print(f"   Generation complete! Video at: {temp_path}")
+                    video_filename = "wan_climax.mp4"
+                    shutil.copy(temp_path, video_filename)
+                    return video_filename
+                
+                # Check for progress/waiting
+                # result[2] is estimated waiting time, result[1] is cost time? 
+                # Use a small sleep to avoid hammering the API
+                time.sleep(2)
+                
         except Exception as e:
             print(f"⚠️ Video Attempt {attempt+1} failed: {e}")
-            time.sleep(30)
+            time.sleep(10) # Wait a bit before retry
     return None
 
 # --- 4. EDITOR ---
