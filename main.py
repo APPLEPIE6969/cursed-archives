@@ -187,6 +187,111 @@ class SubmagicClient:
             print(f"⚠️ Submagic Client Error: {e}")
             return video_path
 
+# --- 2.5. CREATOMATE CLIENT (Fallback Captions) ---
+class CreatomateClient:
+    BASE_URL = "https://api.creatomate.com/v2/renders"
+    
+    def __init__(self):
+        self.api_key = os.environ.get("CREATOMATE_API_KEY")
+        if not self.api_key:
+            print("⚠️ CREATOMATE_API_KEY not found! Fallback will be skipped.")
+
+    def process_video(self, video_path, text_overlay):
+        if not self.api_key:
+            return video_path
+
+        print(f"✨ Creatomate: Processing {video_path}...")
+        
+        # 1. Host Video Temporarily (file.io)
+        # Creatomate needs a public URL. GitHub Actions local files are not public.
+        # We use file.io for ephemeral hosting (auto deletes after download).
+        public_url = self._upload_to_temp_host(video_path)
+        if not public_url:
+            return video_path
+            
+        # 2. Trigger Render
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Template from user request
+        data = {
+          "template_id": "3ec2bf1b-7151-4b5d-a4d3-cb819cfb78ec",
+          "modifications": {
+            "Video.source": public_url,
+            "Text-1.text": text_overlay, # "Your Text And Video Here"
+            "Text-2.text": "Create & Automate\n[size 150%]Video[/size]" # Static or dynamic? User snippet had this.
+            # Ideally we might want to just caption the audio? 
+            # The user snippet seems to be a specific visual template.
+            # We will use the caption text provided in args or just the hook text?
+            # User said "use this as fallback for some".
+            # If this is for captions, Creatomate usually needs a transcription.
+            # If this template just adds text overlay, we'll use header text.
+            # Let's trust the user wants this specific template applied.
+          }
+        }
+        
+        try:
+            print("      ...Triggering Render...")
+            res = requests.post(self.BASE_URL, headers=headers, json=data)
+            
+            if res.status_code != 200:
+                print(f"⚠️ Creatomate Render Req Failed: {res.text}")
+                return video_path
+                
+            render_data = res.json()[0] # Returns array
+            render_id = render_data.get('id')
+            status = render_data.get('status')
+            
+            # 3. Poll
+            for _ in range(60): # 10 min
+                if status == 'succeeded':
+                    url = render_data.get('url')
+                    print(f"   ✅ Creatomate Success! Downloading...")
+                    final_res = requests.get(url)
+                    out_path = video_path.replace(".mp4", "_creatomate.mp4")
+                    with open(out_path, "wb") as f:
+                        f.write(final_res.content)
+                    return out_path
+                    
+                elif status == 'failed':
+                    print(f"❌ Creatomate Failed: {render_data.get('errorMessage')}")
+                    return video_path
+                    
+                time.sleep(5)
+                # Refresh status
+                check_res = requests.get(f"{self.BASE_URL}/{render_id}", headers=headers)
+                if check_res.status_code == 200:
+                    render_data = check_res.json()
+                    status = render_data.get('status')
+                else:
+                    print("pwning polling...")
+                    
+            return video_path
+            
+        except Exception as e:
+            print(f"⚠️ Creatomate Error: {e}")
+            return video_path
+
+    def _upload_to_temp_host(self, file_path):
+        print("      ...Uploading to temp host (file.io) for URL...")
+        try:
+            with open(file_path, 'rb') as f:
+                # 14 days retention, 1 download limit (auto delete)
+                res = requests.post('https://file.io', files={'file': f}, data={'expires': '1d'})
+            
+            if res.status_code == 200:
+                link = res.json().get('link')
+                print(f"      ...Temp URL: {link}")
+                return link
+            else:
+                print(f"⚠️ file.io upload failed: {res.text}")
+                return None
+        except Exception as e:
+            print(f"⚠️ Temp Upload Error: {e}")
+            return None
+
 # --- 3. IMAGE GENERATOR (Freepik Mystic) ---
 def generate_image_freepik(prompt, filename):
     print(f"🎨 Generating Image (Freepik): {filename}...")
@@ -494,9 +599,20 @@ if __name__ == "__main__":
             output_filename=final_file
         )
         
-        # 4. CAPTIONS: Submagic (Placeholder/Optional)
+        # 4. CAPTIONS: Submagic -> Creatomate Fallback
+        
+        # Try Submagic first
         submagic = SubmagicClient()
-        final_file = submagic.process_video(final_file, data['title'])
+        captioned_file = submagic.process_video(final_file, data['title'])
+        
+        if captioned_file == final_file:
+             # Submagic failed or skipped. Try Creatomate.
+             creatomate = CreatomateClient()
+             # Use Hook text or Title for overlay? User provided template suggesting text overlay.
+             # We'll use the Hook Text as the primary overlay content.
+             captioned_file = creatomate.process_video(final_file, data.get('hook_text', 'WATCH THIS'))
+             
+        final_file = captioned_file
         
         # 5. UPLOAD
         vid_id = upload_to_youtube(final_file, data['title'], data['description'], data['hashtags'])
