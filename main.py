@@ -255,17 +255,25 @@ def create_viral_short(hook_video_path, body_image_paths, audio_path, hook_text,
     clips = []
     
     # 1. THE HOOK (0-3s)
-    # Visual Hook: Wan 2.2 generated video
+    # Visual Hook: Wan 2.2 generated video OR fallback image
     if os.path.exists(hook_video_path):
-        hook_clip = VideoFileClip(hook_video_path).resize(height=1280)
-        # Center crop to 720x1280
-        if hook_clip.w > 720:
-             hook_clip = hook_clip.crop(x1=hook_clip.w/2 - 360, width=720)
-        
-        # Duration: First 3 seconds or audio length if shorter?
-        # User says "First 3 Seconds Optimization".
-        hook_duration = min(3, total_duration) 
-        hook_clip = hook_clip.subclip(0, hook_duration)
+        # Determine if video or image
+        if hook_video_path.lower().endswith(('.mp4', '.mov', '.avi')):
+            hook_clip = VideoFileClip(hook_video_path).resize(height=1280)
+            # Center crop to 720x1280
+            if hook_clip.w > 720:
+                 hook_clip = hook_clip.crop(x1=hook_clip.w/2 - 360, width=720)
+            # Duration: First 3 seconds or audio length if shorter?
+            hook_duration = min(3, total_duration) 
+            hook_clip = hook_clip.subclip(0, hook_duration)
+        else:
+            # Fallback to ImageClip if it's a jpg/png
+            hook_duration = min(3, total_duration)
+            hook_clip = ImageClip(hook_video_path).set_duration(hook_duration).resize(height=1280)
+            if hook_clip.w > 720:
+                 hook_clip = hook_clip.crop(x1=hook_clip.w/2 - 360, width=720)
+            # Apply subtle zoom to static hook
+            hook_clip = hook_clip.resize(lambda t: 1 + 0.05*t)
         
         # Text Hook: Overlay
         # Using simple TextClip for now (Submagic would replace this if active)
