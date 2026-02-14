@@ -33,23 +33,42 @@ HF_TOKEN = get_secret("HF_TOKEN")
 POLLINATIONS_API_KEY = get_secret("POLLINATIONS_API_KEY")
 
 # --- HELPER FUNCTIONS ---
-def upload_to_file_io(file_path):
-    print("      ...Uploading to temp host (file.io) for URL...")
+def upload_to_temp_host(file_path):
+    print("      ...Uploading to temp host (file.io / tmpfiles.org)...")
+    
+    # Attempt 1: file.io
     try:
         with open(file_path, 'rb') as f:
-            # 14 days retention, 1 download limit (auto delete)
-            res = requests.post('https://file.io', files={'file': f}, data={'expires': '1d'})
+            res = requests.post('https://file.io', files={'file': f}, data={'expires': '1d'}, timeout=30)
         
         if res.status_code == 200:
             link = res.json().get('link')
-            print(f"      ...Temp URL: {link}")
+            print(f"      ...file.io URL: {link}")
             return link
         else:
             print(f"⚠️ file.io upload failed: {res.text}")
-            return None
     except Exception as e:
-        print(f"⚠️ Temp Upload Error: {e}")
-        return None 
+        print(f"⚠️ file.io Error: {e}")
+
+    # Attempt 2: tmpfiles.org (Fallback)
+    try:
+        with open(file_path, 'rb') as f:
+            # tmpfiles.org returns HTML directly sometimes, or JSON. API is https://tmpfiles.org/api/v1/upload
+            res = requests.post('https://tmpfiles.org/api/v1/upload', files={'file': f}, timeout=30)
+            
+        if res.status_code == 200:
+            data = res.json()
+            if data.get('status') == 'success':
+                url = data['data']['url']
+                # The direct download URL needs adjustment: replace /org/ with /org/dl/
+                dl_url = url.replace("tmpfiles.org/", "tmpfiles.org/dl/")
+                print(f"      ...tmpfiles.org URL: {dl_url}")
+                return dl_url
+        print(f"⚠️ tmpfiles.org upload failed: {res.text}")
+    except Exception as e:
+        print(f"⚠️ tmpfiles.org Error: {e}")
+
+    return None 
 
 # --- 1. BRAIN ---
 # --- 1. VIRAL BRAIN ---
@@ -127,17 +146,22 @@ class SubmagicClient:
             # 3: Verify Submagic Upload Payload (Debug)
             # Some APIs need the file tuple to be (filename, file_object, content_type)
             with open(video_path, 'rb') as f:
-                # Based on search results: 'file', 'title', 'language', 'templateName'
-                files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
-                data = {
-                    'title': title[:100],
-                    'language': 'en',
-                    'templateName': 'Hormozi 2' 
-                }
-                res = requests.post(upload_url, headers=headers, files=files, data=data) 
+                # FIX: Send metadata as multipart fields (tuples) instead of 'data' dict
+                # requests handles mixed files/data better this way for some endpoints
+                files_payload = [
+                    ('file', (os.path.basename(video_path), f, 'video/mp4')),
+                    ('title', (None, title[:100])),
+                    ('language', (None, 'english')), # 'en' or 'english'? 'english' is safer for some APIs
+                    ('templateName', (None, 'Hormozi 2'))
+                ]
+                
+                # We do NOT pass 'data' separately now.
+                res = requests.post(upload_url, headers=headers, files=files_payload) 
             
             if res.status_code not in [200, 201]:
                 print(f"⚠️ Submagic Upload Failed: {res.status_code} - {res.text}")
+                # Debug print
+                # print(f"Payload Debug: {files_payload}") 
                 return video_path
                 
             project_data = res.json().get('data', {}) # Assuming 'data' envelope or direct
@@ -227,7 +251,7 @@ class CreatomateClient:
         # 1. Host Video Temporarily (file.io)
         # Creatomate needs a public URL. GitHub Actions local files are not public.
         # We use file.io for ephemeral hosting (auto deletes after download).
-        public_url = upload_to_file_io(video_path)
+        public_url = upload_to_temp_host(video_path)
         if not public_url:
             return video_path
             
@@ -376,7 +400,7 @@ def animate_pollinations_i2v(image_path, prompt):
         return None
 
     # 1. Upload Image to get URL
-    image_url = upload_to_file_io(image_path)
+    image_url = upload_to_temp_host(image_path)
     if not image_url:
         print("⚠️ Failed to upload image for Pollinations.")
         return None
