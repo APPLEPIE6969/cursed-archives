@@ -558,8 +558,11 @@ def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_
     
     if body_duration > 0 and body_image_paths:
         # Calculate duration per image based on BODY audio
+        # Logic: Remaining Audio = Total Audio - Hook Duration
+        # We want images to fill this exact duration.
+        remaining_audio = max(body_duration, 0.1) # Default to body audio clip duration
         num_images = len(body_image_paths)
-        duration_per_image = body_duration / num_images
+        duration_per_image = remaining_audio / num_images
         
         for i, img_path in enumerate(body_image_paths):
             if not os.path.exists(img_path): continue
@@ -586,8 +589,17 @@ def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_
         # Actually, let's keep them as a list and concat all at the end.
         pass
     
-    # Concatenate all visual clips (Hook + Body Images)
+    # --- 3. DURATION MATCHING ---
+    # We now calculate image duration dynamically so no looping is needed.
+    # Just validation check.
+    current_video_duration = sum([c.duration for c in clips])
+    print(f"   [INFO] Video Duration: {current_video_duration:.2f}s | Audio Duration: {total_audio_duration:.2f}s")
+
+    # Concatenate all visual clips (Hook + Body Images + Loops)
     final_video = concatenate_videoclips(clips, method="compose")
+    
+    # Trim to exact audio duration
+    final_video = final_video.subclip(0, total_audio_duration)
     
     # Composite Audio (Hook Audio + Body Audio)
     # Note: concatenate_videoclips might preserve audio if clips have it. 
@@ -611,7 +623,7 @@ def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_
                  bg_music = concatenate_audioclips([bg_music] * n_loops)
              
              bg_music = bg_music.subclip(0, final_duration)
-             bg_music = bg_music.volumex(0.25) # Low volume background
+             bg_music = bg_music.volumex(0.35) # Increased volume (was 0.25)
              
              final_audio = CompositeAudioClip([primary_audio, bg_music])
         except Exception as e:
