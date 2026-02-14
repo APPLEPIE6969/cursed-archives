@@ -10,6 +10,7 @@ import urllib.parse
 from gradio_client import Client
 from groq import Groq
 import PIL.Image
+import yt_dlp
 
 # --- 🛠️ COMPATIBILITY FIX ---
 if not hasattr(PIL.Image, 'ANTIALIAS'):
@@ -99,6 +100,8 @@ class ViralBrain:
             "Return JSON with:\n"
             "- 'title': Viral clickbait title.\n"
             "- 'target_reaction': The chosen reaction.\n"
+            "- 'music_vibe': One of [suspense, psychological, jumpscare, dark cinematic].\n"
+            "- 'music_intensity': low/medium/high.\n"
             "- 'hook_visual': Detailed prompt for the FIRST 3 seconds (The Hook Image).\n"
             "- 'hook_audio': The first sentence spoken (The Verbal Hook).\n"
             "- 'hook_text': The text overlay for the hook (The Text Hook).\n"
@@ -130,13 +133,13 @@ class SubmagicClient:
     def __init__(self):
         self.api_key = os.environ.get("SUBMAGIC_API_KEY")
         if not self.api_key:
-            print("⚠️ SUBMAGIC_API_KEY not found! Captions will be skipped.")
+            print("[WARN] SUBMAGIC_API_KEY not found! Captions will be skipped.")
 
     def process_video(self, video_path, title):
         if not self.api_key:
             return video_path
 
-        print(f"✨ Submagic: Uploading {video_path}...")
+        print(f"[SUBMAGIC] Uploading {video_path}...")
         
         # 1. Upload Video
         upload_url = f"{self.BASE_URL}/projects"
@@ -148,18 +151,19 @@ class SubmagicClient:
             with open(video_path, 'rb') as f:
                 # FIX: Send metadata as multipart fields (tuples) instead of 'data' dict
                 # requests handles mixed files/data better this way for some endpoints
-                files_payload = [
-                    ('file', (os.path.basename(video_path), f, 'video/mp4')),
-                    ('title', (None, title[:100])),
-                    ('language', (None, 'english')), # 'en' or 'english'? 'english' is safer for some APIs
-                    ('templateName', (None, 'Hormozi 2'))
-                ]
+                # FIX: Use 'data' for metadata, 'files' for the file.
+                # requests will properly format this as multipart/form-data
+                files = {'file': (os.path.basename(video_path), f, 'video/mp4')}
+                data = {
+                    'title': title[:100],
+                    'language': 'english',
+                    'templateName': 'Hormozi 2'
+                }
                 
-                # We do NOT pass 'data' separately now.
-                res = requests.post(upload_url, headers=headers, files=files_payload) 
+                res = requests.post(upload_url, headers=headers, files=files, data=data) 
             
             if res.status_code not in [200, 201]:
-                print(f"⚠️ Submagic Upload Failed: {res.status_code} - {res.text}")
+                print(f"[WARN] Submagic Upload Failed: {res.status_code} - {res.text}")
                 # Debug print
                 # print(f"Payload Debug: {files_payload}") 
                 return video_path
@@ -170,7 +174,7 @@ class SubmagicClient:
             
             project_id = project_data.get('id')
             if not project_id:
-                print(f"⚠️ Submagic: No Project ID returned. {res.text}")
+                print(f"[WARN] Submagic: No Project ID returned. {res.text}")
                 return video_path
                 
             print(f"   Submagic Project ID: {project_id}. Waiting for processing...")
@@ -217,20 +221,20 @@ class SubmagicClient:
                                 f_out.write(final_res.content)
                             return captioned_path
                         else:
-                            print("⚠️ Submagic Completed but no URL found.")
+                            print("[WARN] Submagic Completed but no URL found.")
                             return video_path
                             
                     elif status == 'failed':
-                        print("❌ Submagic Processing Failed.")
+                        print("[ERR] Submagic Processing Failed.")
                         return video_path
                 else:
                     print(f"   Polling Error: {status_res.status_code}")
                     
-            print("⚠️ Submagic Timeout.")
+            print("[WARN] Submagic Timeout.")
             return video_path
 
         except Exception as e:
-            print(f"⚠️ Submagic Client Error: {e}")
+            print(f"[WARN] Submagic Client Error: {e}")
             return video_path
 
 # --- 2.5. CREATOMATE CLIENT (Fallback Captions) ---
@@ -240,13 +244,13 @@ class CreatomateClient:
     def __init__(self):
         self.api_key = os.environ.get("CREATOMATE_API_KEY")
         if not self.api_key:
-            print("⚠️ CREATOMATE_API_KEY not found! Fallback will be skipped.")
+            print("[WARN] CREATOMATE_API_KEY not found! Fallback will be skipped.")
 
     def process_video(self, video_path, text_overlay):
         if not self.api_key:
             return video_path
 
-        print(f"✨ Creatomate: Processing {video_path}...")
+        print(f"[CREATOMATE] Processing {video_path}...")
         
         # 1. Host Video Temporarily (file.io)
         # Creatomate needs a public URL. GitHub Actions local files are not public.
@@ -282,11 +286,16 @@ class CreatomateClient:
             print("      ...Triggering Render...")
             res = requests.post(self.BASE_URL, headers=headers, json=data)
             
-            if res.status_code != 200:
-                print(f"⚠️ Creatomate Render Req Failed: {res.text}")
+            if res.status_code not in [200, 201, 202]:
+                print(f"[WARN] Creatomate Render Req Failed: {res.status_code} - {res.text}")
                 return video_path
                 
-            render_data = res.json()[0] # Returns array
+            resp_json = res.json()
+            # Handle list or single dict
+            if isinstance(resp_json, list):
+                render_data = resp_json[0]
+            else:
+                render_data = resp_json
             render_id = render_data.get('id')
             status = render_data.get('status')
             
@@ -294,7 +303,7 @@ class CreatomateClient:
             for _ in range(60): # 10 min
                 if status == 'succeeded':
                     url = render_data.get('url')
-                    print(f"   ✅ Creatomate Success! Downloading...")
+                    print(f"   [OK] Creatomate Success! Downloading...")
                     final_res = requests.get(url)
                     out_path = video_path.replace(".mp4", "_creatomate.mp4")
                     with open(out_path, "wb") as f:
@@ -302,7 +311,7 @@ class CreatomateClient:
                     return out_path
                     
                 elif status == 'failed':
-                    print(f"❌ Creatomate Failed: {render_data.get('errorMessage')}")
+                    print(f"[ERR] Creatomate Failed: {render_data.get('errorMessage')}")
                     return video_path
                     
                 time.sleep(5)
@@ -317,17 +326,17 @@ class CreatomateClient:
             return video_path
             
         except Exception as e:
-            print(f"⚠️ Creatomate Error: {e}")
+            print(f"[WARN] Creatomate Error: {e}")
             return video_path
 
 
 
 # --- 3. IMAGE GENERATOR (Freepik Mystic) ---
 def generate_image_freepik(prompt, filename):
-    print(f"🎨 Generating Image (Freepik): {filename}...")
+    print(f"[IMG] Generating Image (Freepik): {filename}...")
     api_key = os.environ.get("FREEPIK_API_KEY")
     if not api_key:
-        print("⚠️ FREEPIK_API_KEY not found. Using fallback placeholder.")
+        print("[WARN] FREEPIK_API_KEY not found. Using fallback placeholder.")
         PIL.Image.new('RGB', (720, 1280), (20, 20, 20)).save(filename)
         return filename
 
@@ -350,7 +359,7 @@ def generate_image_freepik(prompt, filename):
         # 1. Start Generation
         res = requests.post(url, json=payload, headers=headers)
         if res.status_code != 200:
-            print(f"❌ Freepik Request Failed: {res.text}")
+            print(f"[ERR] Freepik Request Failed: {res.text}")
             raise Exception(f"Freepik API Error: {res.status_code}")
         
         task_data = res.json().get("data", {})
@@ -376,13 +385,13 @@ def generate_image_freepik(prompt, filename):
                         f.write(img_res.content)
                     return filename
                 elif status == "FAILED":
-                    print("❌ Freepik Task Failed.")
+                    print("[ERR] Freepik Task Failed.")
                     break
             else:
                 print(f"   Polling Error: {check_res.status_code}")
 
     except Exception as e:
-        print(f"⚠️ Image Generation Error: {e}")
+        print(f"[WARN] Image Generation Error: {e}")
 
     # Fallback
     print("   Using fallback image.")
@@ -393,16 +402,16 @@ def generate_image_freepik(prompt, filename):
 
 # --- 3.5 POLLINATIONS AI (Fallback) ---
 def animate_pollinations_i2v(image_path, prompt):
-    print(f"🌸 Connecting to Pollinations AI (Wan 2.6 Fallback)...")
+    print(f"[POLLINATIONS] Connecting to Pollinations AI (Wan 2.6 Fallback)...")
     
     if not POLLINATIONS_API_KEY:
-        print("⚠️ POLLINATIONS_API_KEY not found! Fallback skipped.")
+        print("[WARN] POLLINATIONS_API_KEY not found! Fallback skipped.")
         return None
 
     # 1. Upload Image to get URL
     image_url = upload_to_temp_host(image_path)
     if not image_url:
-        print("⚠️ Failed to upload image for Pollinations.")
+        print("[WARN] Failed to upload image for Pollinations.")
         return None
 
     # 2. Construct URL
@@ -430,21 +439,21 @@ def animate_pollinations_i2v(image_path, prompt):
             with open(final_name, 'wb') as f:
                 for chunk in res.iter_content(chunk_size=8192):
                     f.write(chunk)
-            print(f"   ✅ Pollinations Success! Saved to {final_name}")
+            print(f"   [OK] Pollinations Success! Saved to {final_name}")
             return final_name
         else:
-            print(f"❌ Pollinations Failed: {res.status_code} - {res.text}")
+            print(f"[ERR] Pollinations Failed: {res.status_code} - {res.text}")
             return None
 
     except Exception as e:
-        print(f"⚠️ Pollinations Error: {e}")
+        print(f"[WARN] Pollinations Error: {e}")
         return None
 
 # --- 3. VIDEO GENERATOR (Wan 2.2 I2V) ---
 from gradio_client import handle_file
 
 def animate_wan_i2v(image_path, prompt, max_retries=3):
-    print(f"🎬 Connecting to Wan-AI/Wan2.2 (I2V)...")
+    print(f"[WAN] Connecting to Wan-AI/Wan2.2 (I2V)...")
     
     for attempt in range(max_retries):
         try:
@@ -482,15 +491,15 @@ def animate_wan_i2v(image_path, prompt, max_retries=3):
             return final_name
 
         except Exception as e:
-            print(f"⚠️ Video Attempt {attempt+1} failed: {e}")
+            print(f"[WARN] Video Attempt {attempt+1} failed: {e}")
             time.sleep(10)
     
-    print("⚠️ All Wan 2.2 attempts failed. Trying Pollinations Fallback...")
+    print("[WARN] All Wan 2.2 attempts failed. Trying Pollinations Fallback...")
     return animate_pollinations_i2v(image_path, prompt)
 
 # --- 4. EDITOR (Viral Engine) ---
-def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_audio_path, hook_text, output_filename):
-    print("✂️ Editing Viral Short (Smart Sync)...")
+def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_audio_path, hook_text, output_filename, music_path=None):
+    print("[EDIT] Editing Viral Short (Smart Sync)...")
     
     # Load Audios
     hook_audio = AudioFileClip(hook_audio_path)
@@ -585,8 +594,33 @@ def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_
     # Hook has audio. Body images don't.
     # We need to explicitly set the Body Audio to start after Hook.
     # Safest: Create a composite audio clip.
-    full_audio = concatenate_audioclips([hook_audio, body_audio])
-    final_video = final_video.set_audio(full_audio)
+    # Composite Audio with Music?
+    # Logic: script audio is primary. Music is background.
+    # If music_path is provided, we mix it here.
+    
+    primary_audio = concatenate_audioclips([hook_audio, body_audio])
+    
+    if music_path and os.path.exists(music_path):
+        print(f"   [MUSIC] Mixing background music: {music_path}")
+        try:
+             bg_music = AudioFileClip(music_path)
+             # Loop if too short
+             if bg_music.duration < final_duration:
+                 # Calculate loops needed
+                 n_loops = int(final_duration / bg_music.duration) + 1
+                 bg_music = concatenate_audioclips([bg_music] * n_loops)
+             
+             bg_music = bg_music.subclip(0, final_duration)
+             bg_music = bg_music.volumex(0.25) # Low volume background
+             
+             final_audio = CompositeAudioClip([primary_audio, bg_music])
+        except Exception as e:
+             print(f"[WARN] Music Mix Error: {e}")
+             final_audio = primary_audio
+    else:
+        final_audio = primary_audio
+
+    final_video = final_video.set_audio(final_audio)
     
     # Ensure exact duration match
     # STRICT SHORTS LIMIT: 59 seconds max to be safe.
@@ -597,7 +631,7 @@ def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_
     return output_filename
 
 def generate_audio_kokoro(text, filename):
-    print("   🎙️ Generating audio (Kokoro TTS)...")
+    print("   [TTS] Generating audio (Kokoro TTS)...")
     try:
         client = Client("https://yakhyo-kokoro-onnx.hf.space/")
         result = client.predict(
@@ -611,22 +645,140 @@ def generate_audio_kokoro(text, filename):
         shutil.copy(result, filename)
         return filename
     except Exception as e:
-        print(f"   ⚠️ Kokoro Init Error: {e}")
+        print(f"   [WARN] Kokoro Init Error: {e}")
         raise e
 
 async def make_audio(text, filename):
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, generate_audio_kokoro, text, filename)
-        print("   ✅ Kokoro TTS success.")
+        print("   [OK] Kokoro TTS success.")
     except Exception as e:
-        print(f"   ⚠️ Kokoro TTS failed: {e}. Switching to EdgeTTS fallback...")
+        print(f"   [WARN] Kokoro TTS failed: {e}. Switching to EdgeTTS fallback...")
         try:
             await edge_tts.Communicate(text, "en-US-ChristopherNeural").save(filename)
             print("   ✅ EdgeTTS success.")
         except Exception as e2:
-             print(f"   ❌ All TTS failed: {e2}")
+             print(f"   [ERR] All TTS failed: {e2}")
              raise e2
+
+# --- 4.5 MUSIC ENGINE ---
+class MusicEngine:
+    TAG_MAP = {
+        "suspense": "dark ambient horror music no copyright",
+        "psychological": "psychological thriller background music no copyright",
+        "jumpscare": "horror chase music phonk no copyright",
+        "dark cinematic": "dark cinematic horror soundtrack no copyright"
+    }
+
+    def __init__(self):
+        pass
+
+    def select_song(self, vibe, intensity):
+        search_query = self.TAG_MAP.get(vibe, "horror ambient music no copyright")
+        if intensity == "high":
+            search_query += " intense"
+        
+        print(f"[MUSIC] MusicEngine: Search Query = '{search_query}'")
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'default_search': 'ytsearch1',
+            'noplaylist': True,
+            'quiet': True,
+            'extract_flat': True # Just get metadata first
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(search_query, download=False)
+                if 'entries' in info and info['entries']:
+                    video_info = info['entries'][0]
+                    return video_info['url'], video_info['title']
+        except Exception as e:
+            print(f"[WARN] Music Search Failed: {e}")
+            
+        return None, None
+
+    def download_song(self, url, filename="music.mp3"):
+        print(f"[DL] Downloading Music: {url}...")
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': filename,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'overwrites': True
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            # yt-dlp appends extension to outtmpl if not present in some cases,
+            # but FFmpegExtractAudio usually ensures it ends in .mp3
+            # We check if file exists, else try appending .mp3
+            final_path = filename
+            if not os.path.exists(final_path):
+                 if os.path.exists(final_path + ".mp3"):
+                     final_path += ".mp3"
+            
+            return final_path
+        except Exception as e:
+            print(f"[WARN] Music Download Failed: {e}")
+            return None
+
+def add_horror_music(video_path, script_vibe="suspense", intensity="medium"):
+    """
+    Modular function to add horror music to an existing video.
+    """
+    print(f"[MUSIC] Adding Horror Music ({script_vibe}/{intensity}) to {video_path}...")
+    engine = MusicEngine()
+    url, title = engine.select_song(script_vibe, intensity)
+    
+    if not url:
+        print("[WARN] No music found.")
+        return video_path
+        
+    music_file = "temp_music.mp3"
+    downloaded_path = engine.download_song(url, music_file)
+    
+    if not downloaded_path or not os.path.exists(downloaded_path):
+        print("[WARN] Music download failed.")
+        return video_path
+        
+    # Mix Audio
+    try:
+        video = VideoFileClip(video_path)
+        music = AudioFileClip(downloaded_path)
+        
+        # Loop music if video is longer
+        if music.duration < video.duration:
+            music = music.fx(vfx.loop, duration=video.duration) # vfx needed? usually afx loop
+            # audio loop is different in moviepy 1.0.3
+            # music = music.loop(duration=video.duration) # Try standard loop
+            pass # See below for safer composition
+            
+        # Cut to video length
+        music = music.subclip(0, video.duration)
+        
+        # Ducking (Volume 0.3)
+        music = music.volumex(0.3)
+        
+        # Composite
+        final_audio = CompositeAudioClip([video.audio, music])
+        final_video = video.set_audio(final_audio)
+        
+        output_path = video_path.replace(".mp4", "_scored.mp4")
+        final_video.write_videofile(output_path, fps=24, codec='libx264', audio_codec='aac', logger=None)
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"[WARN] Audio Mixing Failed: {e}")
+        return video_path
 
 # --- 5. UPLOADER ---
 def upload_to_youtube(video_path, title, description, tags):
@@ -681,7 +833,7 @@ if __name__ == "__main__":
             body_images.append(fname)
             
         # C. Audio (Split for Smart Sync)
-        print("   🎙️ Generating Split Audio...")
+        print("   [AUDIO] Generating Split Audio...")
         hook_audio_text = data.get('hook_audio', '')
         body_audio_text = data.get('script_body', '')
         
@@ -693,6 +845,20 @@ if __name__ == "__main__":
             
         asyncio.run(generate_all_audio())
         
+
+        
+        # D. Music Selection
+        print("   [MUSIC] Searching for Horror Music...")
+        music_engine = MusicEngine()
+        music_vibe = data.get('music_vibe', 'suspense')
+        music_intensity = data.get('music_intensity', 'medium')
+        
+        song_url, song_title = music_engine.select_song(music_vibe, music_intensity)
+        bg_music_path = None
+        if song_url:
+            print(f"   [MUSIC] Selected: {song_title}")
+            bg_music_path = music_engine.download_song(song_url, "bg_music.mp3")
+
         # 3. EDIT: Assemble Viral Short
         final_file = "viral_short.mp4"
         create_viral_short(
@@ -701,7 +867,8 @@ if __name__ == "__main__":
             hook_audio_path="hook.mp3",
             body_audio_path="body.mp3",
             hook_text=data.get('hook_text', 'WAIT FOR IT'), 
-            output_filename=final_file
+            output_filename=final_file,
+            music_path=bg_music_path
         )
         
         # 4. CAPTIONS: Submagic -> Creatomate Fallback
@@ -721,7 +888,7 @@ if __name__ == "__main__":
         
         # 5. UPLOAD
         vid_id = upload_to_youtube(final_file, data['title'], data['description'], data['hashtags'])
-        print(f"🚀 Published: https://youtube.com/shorts/{vid_id}")
+        print(f"[UPLOAD] Published: https://youtube.com/shorts/{vid_id}")
         
     except Exception as e:
-        print(f"❌ Critical Failure: {e}")
+        print(f"[CRITICAL] Failure: {e}")
