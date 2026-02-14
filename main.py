@@ -30,6 +30,26 @@ YT_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
 YT_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
 YT_REFRESH_TOKEN = get_secret("YOUTUBE_REFRESH_TOKEN")
 HF_TOKEN = get_secret("HF_TOKEN") 
+POLLINATIONS_API_KEY = get_secret("POLLINATIONS_API_KEY")
+
+# --- HELPER FUNCTIONS ---
+def upload_to_file_io(file_path):
+    print("      ...Uploading to temp host (file.io) for URL...")
+    try:
+        with open(file_path, 'rb') as f:
+            # 14 days retention, 1 download limit (auto delete)
+            res = requests.post('https://file.io', files={'file': f}, data={'expires': '1d'})
+        
+        if res.status_code == 200:
+            link = res.json().get('link')
+            print(f"      ...Temp URL: {link}")
+            return link
+        else:
+            print(f"⚠️ file.io upload failed: {res.text}")
+            return None
+    except Exception as e:
+        print(f"⚠️ Temp Upload Error: {e}")
+        return None 
 
 # --- 1. BRAIN ---
 # --- 1. VIRAL BRAIN ---
@@ -207,7 +227,7 @@ class CreatomateClient:
         # 1. Host Video Temporarily (file.io)
         # Creatomate needs a public URL. GitHub Actions local files are not public.
         # We use file.io for ephemeral hosting (auto deletes after download).
-        public_url = self._upload_to_temp_host(video_path)
+        public_url = upload_to_file_io(video_path)
         if not public_url:
             return video_path
             
@@ -276,23 +296,7 @@ class CreatomateClient:
             print(f"⚠️ Creatomate Error: {e}")
             return video_path
 
-    def _upload_to_temp_host(self, file_path):
-        print("      ...Uploading to temp host (file.io) for URL...")
-        try:
-            with open(file_path, 'rb') as f:
-                # 14 days retention, 1 download limit (auto delete)
-                res = requests.post('https://file.io', files={'file': f}, data={'expires': '1d'})
-            
-            if res.status_code == 200:
-                link = res.json().get('link')
-                print(f"      ...Temp URL: {link}")
-                return link
-            else:
-                print(f"⚠️ file.io upload failed: {res.text}")
-                return None
-        except Exception as e:
-            print(f"⚠️ Temp Upload Error: {e}")
-            return None
+
 
 # --- 3. IMAGE GENERATOR (Freepik Mystic) ---
 def generate_image_freepik(prompt, filename):
@@ -361,6 +365,57 @@ def generate_image_freepik(prompt, filename):
     PIL.Image.new('RGB', (720, 1280), (50, 50, 50)).save(filename)
     return filename
 
+
+
+# --- 3.5 POLLINATIONS AI (Fallback) ---
+def animate_pollinations_i2v(image_path, prompt):
+    print(f"🌸 Connecting to Pollinations AI (Wan 2.6 Fallback)...")
+    
+    if not POLLINATIONS_API_KEY:
+        print("⚠️ POLLINATIONS_API_KEY not found! Fallback skipped.")
+        return None
+
+    # 1. Upload Image to get URL
+    image_url = upload_to_file_io(image_path)
+    if not image_url:
+        print("⚠️ Failed to upload image for Pollinations.")
+        return None
+
+    # 2. Construct URL
+    # https://gen.pollinations.ai/video/{prompt}?model=wan&image={image_url}
+    # Encode prompt
+    enhanced_prompt = f"found footage horror style, {prompt}, cinematic motion, smooth animation"
+    encoded_prompt = urllib.parse.quote(enhanced_prompt)
+    api_url = f"https://gen.pollinations.ai/video/{encoded_prompt}?model=wan&image={image_url}"
+    
+    headers = {
+        "Authorization": f"Bearer {POLLINATIONS_API_KEY}"
+    }
+
+    try:
+        print(f"   Requesting video generation...")
+        # 3. GET Request (It returns the video content directly or redirects?)
+        # User says "Video generation is computationally heavy...".
+        # curl -o output.mp4. So it likely streams the response.
+        # Timeout needs to be high.
+        
+        res = requests.get(api_url, headers=headers, stream=True, timeout=300)
+        
+        if res.status_code == 200:
+            final_name = "pollinations_wan.mp4"
+            with open(final_name, 'wb') as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"   ✅ Pollinations Success! Saved to {final_name}")
+            return final_name
+        else:
+            print(f"❌ Pollinations Failed: {res.status_code} - {res.text}")
+            return None
+
+    except Exception as e:
+        print(f"⚠️ Pollinations Error: {e}")
+        return None
+
 # --- 3. VIDEO GENERATOR (Wan 2.2 I2V) ---
 from gradio_client import handle_file
 
@@ -405,8 +460,9 @@ def animate_wan_i2v(image_path, prompt, max_retries=3):
         except Exception as e:
             print(f"⚠️ Video Attempt {attempt+1} failed: {e}")
             time.sleep(10)
-            
-    return None
+    
+    print("⚠️ All Wan 2.2 attempts failed. Trying Pollinations Fallback...")
+    return animate_pollinations_i2v(image_path, prompt)
 
 # --- 4. EDITOR (Viral Engine) ---
 def create_viral_short(hook_video_path, body_image_paths, hook_audio_path, body_audio_path, hook_text, output_filename):
