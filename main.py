@@ -20,6 +20,9 @@ from moviepy.editor import *
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from google import genai
+from google.genai import types
+import io
 
 # --- CONFIGURATION ---
 def get_secret(key):
@@ -32,6 +35,10 @@ YT_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
 YT_REFRESH_TOKEN = get_secret("YOUTUBE_REFRESH_TOKEN")
 HF_TOKEN = get_secret("HF_TOKEN") 
 POLLINATIONS_API_KEY = get_secret("POLLINATIONS_API_KEY")
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+SUBMAGIC_API_KEY = get_secret("SUBMAGIC_API_KEY")
+CREATOMATE_API_KEY = get_secret("CREATOMATE_API_KEY")
+FREEPIK_API_KEY = get_secret("FREEPIK_API_KEY")
 
 # --- HELPER FUNCTIONS ---
 def upload_to_temp_host(file_path):
@@ -131,7 +138,7 @@ class SubmagicClient:
     BASE_URL = "https://api.submagic.co/v1"
 
     def __init__(self):
-        self.api_key = os.environ.get("SUBMAGIC_API_KEY")
+        self.api_key = SUBMAGIC_API_KEY
         if not self.api_key:
             print("[WARN] SUBMAGIC_API_KEY not found! Captions will be skipped.")
 
@@ -242,7 +249,7 @@ class CreatomateClient:
     BASE_URL = "https://api.creatomate.com/v2/renders"
     
     def __init__(self):
-        self.api_key = os.environ.get("CREATOMATE_API_KEY")
+        self.api_key = CREATOMATE_API_KEY
         if not self.api_key:
             print("[WARN] CREATOMATE_API_KEY not found! Fallback will be skipped.")
 
@@ -331,10 +338,55 @@ class CreatomateClient:
 
 
 
+# --- 3. IMAGE GENERATOR (Gemini Fallback) ---
+def generate_image_gemini(prompt, filename):
+    print(f"[IMG] Generating Image (Gemini/Imagen): {filename}...")
+    if not GEMINI_API_KEY:
+        print("[WARN] GEMINI_API_KEY not found.")
+        return None
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    # User specified priority order
+    models = [
+        "gemini-3-pro-image-preview",
+        "imagen-4-ultra-generate",
+        "imagen-4-generate",
+        "imagen-4-fast-generate",
+        "gemini-2.5-flash-image"
+    ]
+    
+    for model in models:
+        try:
+            print(f"   Trying model: {model}...")
+            # Attempt generation
+            # Note: '9:16' is standard for Shorts/Reels in Imagen config
+            response = client.models.generate_image(
+                model=model,
+                prompt=prompt,
+                config=types.GenerateImageConfig(
+                    aspect_ratio="9:16",
+                    person_generation="allow_adult", 
+                    safety_filter_level="block_only_high"
+                )
+            )
+            
+            if response.generated_images:
+                image = response.generated_images[0].image
+                image.save(filename)
+                print(f"   [OK] Gemini Success ({model})")
+                return filename
+                
+        except Exception as e:
+            print(f"   [WARN] Model {model} failed: {e}")
+            continue
+            
+    print("[ERR] All Gemini models failed.")
+    return None
+
 # --- 3. IMAGE GENERATOR (Freepik Mystic) ---
 def generate_image_freepik(prompt, filename):
     print(f"[IMG] Generating Image (Freepik): {filename}...")
-    api_key = os.environ.get("FREEPIK_API_KEY")
+    api_key = FREEPIK_API_KEY
     if not api_key:
         print("[WARN] FREEPIK_API_KEY not found. Using fallback placeholder.")
         PIL.Image.new('RGB', (720, 1280), (20, 20, 20)).save(filename)
@@ -394,7 +446,12 @@ def generate_image_freepik(prompt, filename):
         print(f"[WARN] Image Generation Error: {e}")
 
     # Fallback
-    print("   Using fallback image.")
+    print("   [WARN] Freepik failed/skipped. Trying Gemini Fallback...")
+    gemini_result = generate_image_gemini(prompt, filename)
+    if gemini_result:
+        return gemini_result
+        
+    print("   [WARN] Gemini Fallback failed. Using placeholder.")
     PIL.Image.new('RGB', (720, 1280), (50, 50, 50)).save(filename)
     return filename
 
